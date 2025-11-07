@@ -1,0 +1,1 @@
+# Indicators service module initialization
