@@ -18,9 +18,84 @@ class OllamaEngine:
         self.model = getattr(settings, 'OLLAMA_MODEL', 'deepseek-r1:8b')
         self.temperature = getattr(settings, 'OLLAMA_TEMPERATURE', 0.7)
         
+    def get_available_models(self) -> List[Dict]:
+        """Ollama에 설치된 모델 목록 조회"""
+        try:
+            response = requests.get(
+                f"{self.base_url}/api/tags",
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                models = data.get('models', [])
+                return [
+                    {
+                        'name': model.get('name'),
+                        'size': model.get('size', 0),
+                        'modified_at': model.get('modified_at'),
+                        'digest': model.get('digest', '')[:12]  # 짧게 표시
+                    }
+                    for model in models
+                ]
+            else:
+                logger.error(f"Failed to get models: {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting models: {e}")
+            return []
+    
+    def set_model(self, model_name: str) -> bool:
+        """사용할 모델 변경"""
+        try:
+            # 모델이 존재하는지 확인
+            available_models = self.get_available_models()
+            model_names = [m['name'] for m in available_models]
+            
+            if model_name not in model_names:
+                logger.error(f"Model {model_name} not found. Available: {model_names}")
+                return False
+            
+            self.model = model_name
+            logger.info(f"Model changed to: {model_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error setting model: {e}")
+            return False
+    
+    def pull_model(self, model_name: str) -> Dict:
+        """Ollama 모델 다운로드"""
+        try:
+            logger.info(f"Pulling model: {model_name}")
+            
+            response = requests.post(
+                f"{self.base_url}/api/pull",
+                json={"name": model_name},
+                timeout=600,  # 10분 타임아웃
+                stream=True
+            )
+            
+            if response.status_code == 200:
+                # 스트림 응답 처리
+                for line in response.iter_lines():
+                    if line:
+                        # 진행 상황 로깅
+                        logger.info(line.decode('utf-8'))
+                
+                return {"success": True, "message": f"Model {model_name} downloaded"}
+            else:
+                return {"success": False, "message": f"Failed to pull model: {response.status_code}"}
+                
+        except Exception as e:
+            logger.error(f"Error pulling model: {e}")
+            return {"success": False, "message": str(e)}
+        
     def _call_ollama(self, prompt: str) -> Optional[str]:
         """Ollama API 호출"""
         try:
+            logger.info(f"Calling Ollama API with model: {self.model}")
             response = requests.post(
                 f"{self.base_url}/api/generate",
                 json={
@@ -29,18 +104,23 @@ class OllamaEngine:
                     "stream": False,
                     "temperature": self.temperature
                 },
-                timeout=30
+                timeout=180  # 3분으로 증가 (DeepSeek-R1 모델은 추론이 느림)
             )
             
             if response.status_code == 200:
                 result = response.json()
-                return result.get('response', '').strip()
+                response_text = result.get('response', '').strip()
+                logger.info(f"Ollama 응답 받음: {len(response_text)} 글자")
+                return response_text
             else:
-                logger.error(f"Ollama API error: {response.status_code}")
+                logger.error(f"Ollama API error: {response.status_code}, {response.text}")
                 return None
                 
-        except requests.exceptions.ConnectionError:
-            logger.error("Ollama 서버에 연결할 수 없습니다. Ollama가 실행 중인지 확인하세요.")
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Ollama 서버에 연결할 수 없습니다: {e}")
+            return None
+        except requests.exceptions.Timeout as e:
+            logger.error(f"Ollama API 타임아웃: {e}")
             return None
         except Exception as e:
             logger.error(f"Ollama API call failed: {e}")

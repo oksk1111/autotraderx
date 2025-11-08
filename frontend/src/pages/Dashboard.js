@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import MarketList from '../components/MarketList';
 import TradingPanel from '../components/TradingPanel';
 import PositionsPanel from '../components/PositionsPanel';

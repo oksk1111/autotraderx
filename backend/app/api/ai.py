@@ -102,3 +102,76 @@ async def clear_ai_logs():
         "success": True,
         "message": "AI 로그가 초기화되었습니다"
     }
+
+
+@router.get("/models")
+async def get_available_models():
+    """사용 가능한 Ollama 모델 목록 조회"""
+    models = ollama_engine.get_available_models()
+    
+    return {
+        "success": True,
+        "data": {
+            "models": models,
+            "current_model": ollama_engine.model,
+            "recommended_models": [
+                {
+                    "name": "deepseek-r1:8b",
+                    "description": "추론 능력이 뛰어난 8B 파라미터 모델 (추천)",
+                    "use_case": "실시간 트레이딩 AI"
+                },
+                {
+                    "name": "qwen2:14b",
+                    "description": "정밀한 패턴 예측 14B 모델",
+                    "use_case": "안정적 매매용"
+                },
+                {
+                    "name": "llama3:8b",
+                    "description": "빠른 응답 속도의 8B 모델",
+                    "use_case": "CPU 환경 또는 테스트용"
+                },
+                {
+                    "name": "gemma2:9b",
+                    "description": "보수적 리스크 관리 9B 모델",
+                    "use_case": "저위험 전략"
+                }
+            ]
+        }
+    }
+
+
+@router.post("/models/select")
+async def select_model(model_name: str):
+    """사용할 모델 변경"""
+    success = ollama_engine.set_model(model_name)
+    
+    if success:
+        return {
+            "success": True,
+            "message": f"모델이 {model_name}으로 변경되었습니다",
+            "data": {
+                "current_model": ollama_engine.model
+            }
+        }
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail=f"모델 {model_name}을 찾을 수 없습니다"
+        )
+
+
+@router.post("/models/pull")
+async def pull_model(model_name: str):
+    """Ollama 모델 다운로드"""
+    result = ollama_engine.pull_model(model_name)
+    
+    if result["success"]:
+        return {
+            "success": True,
+            "message": result["message"]
+        }
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=result["message"]
+        )

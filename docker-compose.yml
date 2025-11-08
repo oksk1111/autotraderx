@@ -56,6 +56,8 @@ services:
         condition: service_healthy
     networks:
       - autotraderx_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   # Celery Worker
@@ -79,6 +81,8 @@ services:
         condition: service_healthy
     networks:
       - autotraderx_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: celery -A app.celery_app worker --loglevel=info
 
   # React Frontend

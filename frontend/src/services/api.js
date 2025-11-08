@@ -4,7 +4,7 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000,
+  timeout: 200000, // 200초 (AI 분석은 최대 180초 소요 가능)
   headers: {
     'Content-Type': 'application/json',
   },
@@ -72,6 +72,22 @@ export const getOrders = async (state = 'wait', market = null) => {
   const params = { state };
   if (market) params.market = market;
   const response = await apiClient.get('/api/v1/account/orders', { params });
+  return response.data;
+};
+
+// AI APIs
+export const getAIModels = async () => {
+  const response = await apiClient.get('/api/v1/ai/models');
+  return response.data;
+};
+
+export const selectAIModel = async (modelName) => {
+  const response = await apiClient.post(`/api/v1/ai/models/select?model_name=${modelName}`);
+  return response.data;
+};
+
+export const pullAIModel = async (modelName) => {
+  const response = await apiClient.post(`/api/v1/ai/models/pull?model_name=${modelName}`);
   return response.data;
 };
 

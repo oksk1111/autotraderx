@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     USE_AI_DECISION: bool = True
     
     # News & Sentiment API
-    NEWS_API_KEY: str = ""
+    NEWS_API_KEY: str = "d0f822a52a0b4c959b028a6d3b87408a"
     
     # Database
     DATABASE_URL: str

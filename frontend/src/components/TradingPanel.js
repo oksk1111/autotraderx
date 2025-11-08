@@ -10,6 +10,7 @@ const TradingPanel = ({ market, refreshKey, onTradeComplete }) => {
     if (market) {
       loadAnalysis();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [market, refreshKey]);
 
   const loadAnalysis = async () => {
