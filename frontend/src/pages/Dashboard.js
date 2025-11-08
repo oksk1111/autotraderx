@@ -3,6 +3,7 @@ import MarketList from '../components/MarketList';
 import TradingPanel from '../components/TradingPanel';
 import PositionsPanel from '../components/PositionsPanel';
 import AccountInfo from '../components/AccountInfo';
+import AIMonitor from '../components/AIMonitor';
 
 const Dashboard = () => {
   const [selectedMarket, setSelectedMarket] = useState('KRW-BTC');
@@ -32,6 +33,11 @@ const Dashboard = () => {
 
       {/* Main Content */}
       <div className="container mx-auto px-6 py-6">
+        {/* AI Monitor - Full Width */}
+        <div className="mb-6">
+          <AIMonitor />
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Column - Account & Market List */}
           <div className="space-y-6">

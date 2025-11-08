@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     UPBIT_SECRET_KEY: str
     UPBIT_API_URL: str = "https://api.upbit.com/v1"
     
+    # Ollama AI Settings
+    OLLAMA_API_URL: str = "http://host.docker.internal:11434"
+    OLLAMA_MODEL: str = "deepseek-r1:8b"
+    OLLAMA_TEMPERATURE: float = 0.7
+    USE_AI_DECISION: bool = True
+    
+    # News & Sentiment API
+    NEWS_API_KEY: str = ""
+    
     # Database
     DATABASE_URL: str
     

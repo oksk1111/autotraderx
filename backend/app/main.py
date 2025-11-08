@@ -5,7 +5,7 @@ import logging
 
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.api import trading, market, account, backtest
+from app.api import trading, market, account, backtest, ai
 
 # Configure logging
 logging.basicConfig(
@@ -51,6 +51,7 @@ app.include_router(trading.router, prefix="/api/v1/trading", tags=["Trading"])
 app.include_router(market.router, prefix="/api/v1/market", tags=["Market"])
 app.include_router(account.router, prefix="/api/v1/account", tags=["Account"])
 app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtest"])
+app.include_router(ai.router, prefix="/api/v1/ai", tags=["AI"])
 
 
 @app.get("/")

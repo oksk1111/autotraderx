@@ -33,7 +33,10 @@ class UpbitClient:
             payload['query_hash'] = query_hash
             payload['query_hash_alg'] = 'SHA512'
         
-        jwt_token = jwt.encode(payload, self.secret_key)
+        jwt_token = jwt.encode(payload, self.secret_key, algorithm='HS256')
+        # PyJWT 2.0+ returns string, older versions may return bytes
+        if isinstance(jwt_token, bytes):
+            jwt_token = jwt_token.decode('utf-8')
         return {'Authorization': f'Bearer {jwt_token}'}
     
     # Market Data APIs (Public)
