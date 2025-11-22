@@ -31,7 +31,7 @@ class TradeDecisionResult:
 class TradingEngine:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
-        self.predictor = HybridPredictor(self.settings)
+        self.predictor = HybridPredictor(settings=self.settings)
         self.verifier = DualLLMVerifier(self.settings)
         self.guard = EmergencyGuard(self.settings)
 
