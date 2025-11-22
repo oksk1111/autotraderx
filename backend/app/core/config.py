@@ -1,64 +1,76 @@
-from pydantic_settings import BaseSettings
+from functools import lru_cache
+from pathlib import Path
 from typing import List
-import os
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings"""
+    """Application-wide configuration sourced from environment variables."""
+
+    model_config = SettingsConfigDict(env_file=Path(__file__).resolve().parents[2] / ".env", env_file_encoding="utf-8", extra="allow")
+
+    environment: str = "development"
+    debug: bool = True
+    log_level: str = "INFO"
+
+    backend_port: int = 8000
+    frontend_port: int = 4173
+
+    postgres_host: str = "postgres"
+    postgres_port: int = 5432
+    postgres_db: str = "autotrader"
+    postgres_user: str = "autotrader"
+    postgres_password: str = "autotrader"
+    database_url: str | None = None
+
+    redis_host: str = "redis"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_url: str | None = None
+
+    upbit_access_key: str = ""
+    upbit_secret_key: str = ""
+
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.1-70b-versatile"
+    ollama_base_url: str = "http://ollama:11434"
+    ollama_model: str = "deepseek-r1:14b"
+
+    secret_key: str = "change_me"
+    encryption_key: str = "change_me"
+
+    default_trade_amount: float = 50_000
+    max_open_positions: int = 3
+    stop_loss_percent: float = 3.0
+    take_profit_percent: float = 5.0
+    use_ai_verification: bool = True
     
-    # App Config
-    APP_NAME: str = "AutoTraderX"
-    ENVIRONMENT: str = "development"
-    DEBUG: bool = True
-    
-    # Security
-    SECRET_KEY: str
-    ENCRYPTION_KEY: str
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    
-    # Upbit API
-    UPBIT_ACCESS_KEY: str
-    UPBIT_SECRET_KEY: str
-    UPBIT_API_URL: str = "https://api.upbit.com/v1"
-    
-    # Ollama AI Settings
-    OLLAMA_API_URL: str = "http://host.docker.internal:11434"
-    OLLAMA_MODEL: str = "deepseek-r1:8b"
-    OLLAMA_TEMPERATURE: float = 0.7
-    USE_AI_DECISION: bool = True
-    
-    # News & Sentiment API
-    NEWS_API_KEY: str = "d0f822a52a0b4c959b028a6d3b87408a"
-    
-    # Database
-    DATABASE_URL: str
-    
-    # Redis
-    REDIS_HOST: str = "redis"
-    REDIS_PORT: int = 6379
-    REDIS_URL: str = "redis://redis:6379/0"
-    
-    # Trading Settings
-    MAX_TRADE_AMOUNT: float = 100000.0
-    DAILY_TRADE_LIMIT: int = 10
-    STOP_LOSS_PERCENT: float = 2.0
-    TAKE_PROFIT_PERCENT: float = 3.0
-    
-    # Technical Indicators
-    RSI_PERIOD: int = 14
-    RSI_OVERBOUGHT: int = 70
-    RSI_OVERSOLD: int = 30
-    MACD_FAST: int = 12
-    MACD_SLOW: int = 26
-    MACD_SIGNAL: int = 9
-    
-    # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    # 매매 주기 설정 (초단위, 기본값: 5분)
+    trading_cycle_seconds: int = 300
+
+    tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL"]
+
+    slack_webhook_url: str | None = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+
+    @property
+    def resolved_database_url(self) -> str:
+        if self.database_url:
+            return self.database_url
+        return (
+            f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
+    def resolved_redis_url(self) -> str:
+        if self.redis_url:
+            return self.redis_url
+        return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
 
-settings = Settings()
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()  # type: ignore[arg-type]

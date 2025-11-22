@@ -1,172 +1,56 @@
-# AutoTraderX
+# AutoTrader-LXA v3
 
-업비트 오픈 API 기반 실시간 코인 단기 자동 매매 시스템
+Hybrid ML + dual LLM autonomous cryptocurrency trading stack rebuilt from the v3 planning document.
 
-## 📋 프로젝트 개요
+## Features
 
-AutoTraderX는 업비트 API를 활용한 AI 기반 실시간 암호화폐 자동 매매 시스템입니다. 
-단기 스캘핑 전략을 사용하며, 리스크를 최소화한 알고리즘 트레이딩을 제공합니다.
+- FastAPI backend orchestrating ML inference, dual LLM verification (Groq + Ollama), and emergency safeguards.
+- Celery worker/beat for continuous trading cycles and scheduling.
+- React + Vite dashboard showing metrics, decisions, and trade history.
+- PostgreSQL for persistence, Redis for task queue, Ollama container for local LLMs.
 
-## 🚀 주요 기능
+## Getting Started
 
-- ✅ 실시간 시세 데이터 수집 및 분석
-- ✅ AI 기반 매매 패턴 인식
-- ✅ 자동 매수/매도 실행
-- ✅ 손절/익절 자동 설정
-- ✅ 웹 기반 실시간 모니터링 대시보드
-- ✅ 백테스트 및 전략 시뮬레이션
-- ✅ 리스크 관리 시스템
-
-## 🛠 기술 스택
-
-### Backend
-- Python 3.11+
-- FastAPI
-- PostgreSQL
-- Redis
-- Celery
-
-### Frontend
-- React.js
-- TailwindCSS
-- WebSocket
-
-### AI/ML
-- PyTorch
-- scikit-learn
-- pandas, numpy
-
-### Infrastructure
-- Docker
-- Nginx
-
-## 📁 프로젝트 구조
-
-```
-autotraderx/
-├── backend/
-│   ├── app/
-│   │   ├── api/              # API 엔드포인트
-│   │   ├── core/             # 코어 설정 및 보안
-│   │   ├── models/           # 데이터베이스 모델
-│   │   ├── services/         # 비즈니스 로직
-│   │   │   ├── upbit/        # 업비트 API 통합
-│   │   │   ├── trading/      # 매매 엔진
-│   │   │   ├── indicators/   # 기술적 지표
-│   │   │   └── ai/           # AI 모델
-│   │   └── main.py
-│   ├── requirements.txt
-│   └── Dockerfile
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   └── services/
-│   ├── package.json
-│   └── Dockerfile
-├── docker-compose.yml
-└── README.md
-```
-
-## 🔧 설치 및 실행
-
-### 사전 요구사항
-- Docker & Docker Compose
-- 업비트 API 키 (액세스 키, 시크릿 키)
-
-### 환경 변수 설정
-
-`.env` 파일을 생성하고 다음 정보를 입력하세요:
-
-```env
-# Upbit API
-UPBIT_ACCESS_KEY=your_access_key
-UPBIT_SECRET_KEY=your_secret_key
-
-# Database
-POSTGRES_USER=autotraderx
-POSTGRES_PASSWORD=your_password
-POSTGRES_DB=autotraderx_db
-
-# Redis
-REDIS_HOST=redis
-REDIS_PORT=6379
-
-# Security
-SECRET_KEY=your_secret_key
-ENCRYPTION_KEY=your_encryption_key
-```
-
-### Docker로 실행
+1. Duplicate `.env.example` into `.env` and fill all secrets (Upbit, Groq, Telegram, etc.).
+2. Configure trading parameters (optional):
+   - `TRADING_CYCLE_SECONDS`: 매매 주기 (초단위, 기본값: 300 = 5분)
+     - 60: 1분 (매우 공격적, 수수료 주의)
+     - 180: 3분 (빠른 대응)
+     - 300: 5분 (권장, LLM 처리 시간 고려)
+     - 600: 10분 (보수적)
+   - `DEFAULT_TRADE_AMOUNT`: 거래당 투자 금액 (기본값: 50000원)
+   - `MAX_OPEN_POSITIONS`: 최대 동시 보유 포지션 (기본값: 3)
+   - `STOP_LOSS_PERCENT`: 손절 비율 (기본값: 3%)
+   - `TAKE_PROFIT_PERCENT`: 익절 비율 (기본값: 5%)
+3. Build and start the stack:
 
 ```bash
-# 전체 서비스 시작
-docker-compose up -d
-
-# 백엔드만 실행
-docker-compose up -d backend
-
-# 로그 확인
-docker-compose logs -f
+docker compose up --build
 ```
 
-### 로컬 개발 환경
+This launches PostgreSQL, Redis, backend, Celery worker/beat, frontend, and Ollama.
+
+Backend runs at `http://localhost:8000/api`, frontend dashboard at `http://localhost:4173`.
+
+## Development
+
+- Backend dependencies: `pip install -r backend/requirements.txt`
+- Run API locally: `uvicorn app.main:app --reload`
+- Frontend dev server: `npm install && npm run dev` inside `frontend`.
+- Celery worker: `celery -A app.celery_app.celery_app worker --loglevel=info`
+
+## Tests
+
+Run backend unit tests:
 
 ```bash
-# 백엔드
-cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-
-# 프론트엔드
-cd frontend
-npm install
-npm start
+cd backend && pytest
 ```
 
-## 📊 매매 전략
+## Folder Structure
 
-### 기술적 지표
-- RSI (Relative Strength Index)
-- MACD (Moving Average Convergence Divergence)
-- MFI (Money Flow Index)
-- 이동평균선 (MA)
-
-### 매수 조건
-- 상승 추세 전환 지표 2개 이상 일치
-- 거래량 증가 + 단기 이동평균선 상향 돌파
-- RSI 상승세
-
-### 매도 조건
-- 거래량 감소 + 수익률 목표 도달
-- MACD 데드크로스
-- 손절 라인 도달 (-1% ~ -2%)
-
-## 🔒 보안
-
-- API 키 AES256 암호화 저장
-- 거래 한도 제어
-- 슬리피지 처리
-- 모든 거래 로그 기록
-
-## ⚠️ 주의사항
-
-- 이 시스템은 교육 및 연구 목적으로 개발되었습니다.
-- 실제 거래 시 발생하는 모든 손실에 대한 책임은 사용자에게 있습니다.
-- 충분한 백테스트와 소액 테스트를 거친 후 사용하시기 바랍니다.
-
-## 📝 라이선스
-
-MIT License
-
-## 🔗 참고 자료
-
-- [업비트 Open API 문서](https://docs.upbit.com/)
-- [FastAPI 공식 문서](https://fastapi.tiangolo.com/)
-- [React 공식 문서](https://react.dev/)
-
-## 👥 기여
-
-이슈와 PR은 언제나 환영합니다!
+```
+backend/    FastAPI app, ML/LLM services, Celery tasks
+frontend/   React dashboard (Vite)
+docs/       Planning docs (source of truth)
+```

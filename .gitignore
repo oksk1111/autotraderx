@@ -21,6 +21,7 @@ wheels/
 *.egg
 MANIFEST
 venv/
+.venv/
 env/
 ENV/
 
@@ -82,3 +83,11 @@ api_keys/
 *.pid
 *.seed
 *.pid.lock
+
+# ML Models and Data (large files)
+backend/models/
+backend/models_all/
+backend/data/
+*.pth
+*.pkl
+lightgbm_model.txt

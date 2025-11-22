@@ -1,113 +1,62 @@
 services:
-  # PostgreSQL Database
   postgres:
-    image: postgres:15-alpine
-    container_name: autotraderx_postgres
+    image: postgres:15
+    restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-autotraderx}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-autotraderx123}
-      POSTGRES_DB: ${POSTGRES_DB:-autotraderx_db}
+      POSTGRES_DB: autotrader
+      POSTGRES_USER: autotrader
+      POSTGRES_PASSWORD: autotrader
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    networks:
-      - autotraderx_network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-autotraderx}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - pgdata:/var/lib/postgresql/data
 
-  # Redis Cache
   redis:
     image: redis:7-alpine
-    container_name: autotraderx_redis
+    restart: always
     ports:
       - "6379:6379"
-    networks:
-      - autotraderx_network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
-  # FastAPI Backend
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
-    container_name: autotraderx_backend
     env_file:
       - .env
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-autotraderx}:${POSTGRES_PASSWORD:-autotraderx123}@postgres:5432/${POSTGRES_DB:-autotraderx_db}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    volumes:
-      - ./backend:/app
+    depends_on:
+      - postgres
+      - redis
     ports:
       - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - autotraderx_network
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  # Celery Worker
-  celery_worker:
+  worker:
     build:
       context: ./backend
-      dockerfile: Dockerfile
-    container_name: autotraderx_celery
     env_file:
       - .env
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-autotraderx}:${POSTGRES_PASSWORD:-autotraderx123}@postgres:5432/${POSTGRES_DB:-autotraderx_db}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-    volumes:
-      - ./backend:/app
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - autotraderx_network
+      - backend
+      - redis
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: celery -A app.celery_app worker --loglevel=info
+    command: celery -A app.celery_app.celery_app worker --loglevel=info
 
-  # React Frontend
+  scheduler:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    depends_on:
+      - worker
+    command: celery -A app.celery_app.celery_app beat --loglevel=info
+
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
-    container_name: autotraderx_frontend
-    environment:
-      - REACT_APP_API_URL=http://localhost:8000
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    ports:
-      - "3000:3000"
     depends_on:
       - backend
-    networks:
-      - autotraderx_network
-    stdin_open: true
-    tty: true
-
-networks:
-  autotraderx_network:
-    driver: bridge
+    ports:
+      - "4173:4173"
 
 volumes:
-  postgres_data:
+  pgdata:
