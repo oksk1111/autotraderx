@@ -296,3 +296,7 @@ class EmergencyTrader:
         except Exception as e:
             logger.error(f"Error executing emergency trade for {market}: {e}")
             return {'success': False, 'error': str(e)}
+
+
+# 싱글톤 인스턴스
+emergency_trader = EmergencyTrader()

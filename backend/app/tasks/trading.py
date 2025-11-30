@@ -69,16 +69,6 @@ async def run_cycle() -> None:
                 # 특징 생성
                 features = build_features_from_market_data(market_data, market)
                 
-                # 계정 정보 가져오기 (실제 구현에서는 Upbit API 호출)
-                # TODO: Upbit API에서 실제 계정 정보 조회
-                account_info = {
-                    "principal": 1000000.0,  # 원금
-                    "available_balance": 500000.0,  # 가용 자금
-                    "open_positions": 2,  # 보유 중인 포지션 수
-                    "avg_return": 0.05,  # 평균 수익률
-                    "consecutive_losses": 0,  # 연속 손실 횟수
-                }
-                
                 # 거래 결정
                 decision = await engine.decide(db, market, features, account_info)
                 

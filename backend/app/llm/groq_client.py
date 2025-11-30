@@ -15,7 +15,7 @@ class GroqClient:
         self.base_url = "https://api.groq.com/openai/v1/chat/completions"
         self.headers = {"Authorization": f"Bearer {self.settings.groq_api_key}"}
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=30))
     async def verify(self, summary: str) -> dict:
         payload = {
             "model": self.settings.groq_model,
@@ -28,7 +28,7 @@ class GroqClient:
             ],
             "temperature": 0.3,
         }
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(self.base_url, headers=self.headers, json=payload)
             resp.raise_for_status()
             data = resp.json()

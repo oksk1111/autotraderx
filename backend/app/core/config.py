@@ -34,8 +34,8 @@ class Settings(BaseSettings):
 
     groq_api_key: str = ""
     groq_model: str = "llama-3.1-70b-versatile"
-    ollama_base_url: str = "http://ollama:11434"
-    ollama_model: str = "deepseek-r1:14b"
+    ollama_base_url: str = "http://host.docker.internal:11434"
+    ollama_model: str = "qwen2.5:7b"
 
     secret_key: str = "change_me"
     encryption_key: str = "change_me"

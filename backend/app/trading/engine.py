@@ -61,9 +61,10 @@ class TradingEngine:
             )
 
         groq_ok, ollama_ok = await self.verifier.verify(summary)
+        # 둘 다 승인해야 거래 실행
         approved = groq_ok and ollama_ok and ml_signal.action != "HOLD"
         
-        # LLM을 사용하여 투자 비율 결정
+        # LLM을 사용하여 투자 비율 결정 (둘 다 승인했을 때만)
         if approved and account_info:
             investment_decision = await self.verifier.decide_investment_ratio(
                 ml_signal={
@@ -80,10 +81,22 @@ class TradingEngine:
             take_profit = investment_decision["take_profit_target"]
             rationale = f"LLM approvals + {investment_decision['reasoning']}"
         else:
-            investment_ratio = 0.1  # 기본값
+            # ML 신뢰도 기반 자동 투자 비율 계산
+            confidence = max(ml_signal.buy_probability, ml_signal.sell_probability)
+            if confidence >= 0.8:
+                investment_ratio = 0.3  # 높은 신뢰도: 30%
+            elif confidence >= 0.65:
+                investment_ratio = 0.2  # 중간 신뢰도: 20%
+            elif confidence >= 0.55:
+                investment_ratio = 0.1  # 낮은 신뢰도: 10%
+            else:
+                investment_ratio = 0.05  # 매우 낮은 신뢰도: 5%
+            
             max_loss = 0.03
             take_profit = 0.05
-            rationale = "LLM approvals" if approved else "LLM veto"
+            llm_status = "Groq ✅" if groq_ok else "Groq ❌"
+            llm_status += f" Ollama {'✅' if ollama_ok else '❌'}"
+            rationale = f"{llm_status} (신뢰도 기반 자동: {investment_ratio*100:.0f}%)" if approved else "LLM veto"
         
         self._log_decision(db, market, ml_signal, groq_ok, ollama_ok, emergency, rationale)
         return TradeDecisionResult(
@@ -156,23 +169,56 @@ class TradeExecutor:
         
         trade_amount = available_balance * decision.investment_ratio
         
-        trade = TradeLog(
-            market=decision.market,
-            side=decision.action,
-            amount=trade_amount,
-            reason=decision.rationale,
-            context={
-                "confidence": decision.confidence, 
-                "emergency": decision.emergency,
-                "investment_ratio": decision.investment_ratio,
-                "max_loss_acceptable": decision.max_loss_acceptable,
-                "take_profit_target": decision.take_profit_target,
-                "available_balance": available_balance
-            },
-        )
-        db.add(trade)
-        db.commit()
-        logger.info(
-            "Executed %s on %s with amount %.0f (%.1f%% of balance)", 
-            decision.action, decision.market, trade_amount, decision.investment_ratio * 100
-        )
+        # 실제 Upbit API 호출하여 거래 실행
+        import pyupbit
+        try:
+            upbit = pyupbit.Upbit(self.settings.upbit_access_key, self.settings.upbit_secret_key)
+            
+            if decision.action == "BUY":
+                # 매수: KRW로 코인 구매
+                result = upbit.buy_market_order(decision.market, trade_amount)
+                logger.info(f"✅ BUY 주문 실행: {decision.market}, {trade_amount:,.0f}원 ({decision.investment_ratio*100:.0f}%)")
+            elif decision.action == "SELL":
+                # 매도: 보유 코인 전량 매도
+                ticker = decision.market.split('-')[1]
+                balance = upbit.get_balance(ticker)
+                try:
+                    balance_amount = float(balance) if balance else 0.0  # type: ignore
+                except (ValueError, TypeError):
+                    balance_amount = 0.0
+                    
+                if balance_amount > 0:
+                    result = upbit.sell_market_order(decision.market, balance_amount)
+                    logger.info(f"✅ SELL 주문 실행: {decision.market}, {balance_amount} {ticker} 전량 매도")
+                else:
+                    logger.warning(f"⚠️ SELL 실패: {decision.market} 보유량 없음")
+                    result = None
+            else:
+                result = None
+                
+        except Exception as e:
+            logger.error(f"❌ 거래 실행 실패: {decision.market} {decision.action} - {e}")
+            result = None
+        
+        # DB에 거래 로그 저장 (실패해도 계속 진행)
+        try:
+            trade = TradeLog(
+                market=decision.market,
+                side=decision.action,
+                amount=trade_amount,
+                reason=decision.rationale,
+                context={
+                    "confidence": decision.confidence, 
+                    "emergency": decision.emergency,
+                    "investment_ratio": decision.investment_ratio,
+                    "max_loss_acceptable": decision.max_loss_acceptable,
+                    "take_profit_target": decision.take_profit_target,
+                    "available_balance": available_balance,
+                    "upbit_result": str(result) if result else None
+                },
+            )
+            db.add(trade)
+            db.commit()
+        except Exception as e:
+            logger.error(f"거래 로그 저장 실패: {e}")
+            db.rollback()

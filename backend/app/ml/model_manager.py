@@ -49,12 +49,13 @@ class MultiCoinModelManager:
             logger.debug(f"Model for {market} already loaded")
             return True
         
-        # 마켓별 디렉토리 (예: /app/models/KRW-BTC/)
-        market_dir = self.model_base_dir / market.replace("-", "_")
+        # 기본 디렉토리를 먼저 시도 (단일 모델인 경우)
+        market_dir = self.model_base_dir
         
-        # 기본 디렉토리 시도 (단일 모델인 경우)
-        if not market_dir.exists():
-            market_dir = self.model_base_dir
+        # 마켓별 디렉토리가 존재하면 사용 (예: /app/models/KRW_BTC/)
+        market_specific_dir = self.model_base_dir / market.replace("-", "_")
+        if market_specific_dir.exists():
+            market_dir = market_specific_dir
         
         try:
             lstm_path = market_dir / "lstm_best.pth"

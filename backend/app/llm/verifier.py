@@ -66,7 +66,7 @@ class DualLLMVerifier:
         }
         
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
                     self.groq.base_url,
                     headers=self.groq.headers,
@@ -84,6 +84,25 @@ class DualLLMVerifier:
                 raise ValueError("Invalid investment_ratio")
             
             return result
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                # 레이트 리미트 시 신뢰도 기반 폴백
+                confidence = ml_signal.get('confidence', 0)
+                if confidence >= 0.8:
+                    ratio = 0.3
+                elif confidence >= 0.65:
+                    ratio = 0.2
+                elif confidence >= 0.55:
+                    ratio = 0.1
+                else:
+                    ratio = 0.05
+                return {
+                    "investment_ratio": ratio,
+                    "reasoning": f"Groq API 레이트 리미트, 신뢰도 기반 {ratio*100:.0f}% 투자",
+                    "max_loss_acceptable": 0.03,
+                    "take_profit_target": 0.05
+                }
+            raise
         except (json.JSONDecodeError, ValueError, KeyError, Exception) as e:
             # 기본값 반환 (보수적)
             return {
