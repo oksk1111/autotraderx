@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     # 공격적 매매 모드 설정
     aggressive_trading_mode: bool = True  # True: tick 단위 공격적 매매 활성화
     tick_interval_seconds: int = 60  # tick 매매 주기 (초단위, 기본값: 1분)
-    tick_min_confidence: float = 0.7  # tick 매매 최소 신뢰도 (기본값: 70%)
+    tick_min_confidence: float = 0.6  # tick 매매 최소 신뢰도 (기본값: 60%, v4.0 조정)
     tick_max_positions: int = 5  # tick 매매 최대 동시 포지션 수
 
     tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL"]

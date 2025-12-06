@@ -25,7 +25,7 @@ class AutoTradingConfig(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     selected_markets: Mapped[List[str]] = mapped_column(JSON, default=list)
     use_ai: Mapped[bool] = mapped_column(Boolean, default=True)
-    min_confidence: Mapped[float] = mapped_column(Float, default=0.6)
+    min_confidence: Mapped[float] = mapped_column(Float, default=0.5)
     stop_loss_percent: Mapped[float] = mapped_column(Float, default=3.0)
     take_profit_percent: Mapped[float] = mapped_column(Float, default=5.0)
     max_positions: Mapped[int] = mapped_column(Integer, default=3)

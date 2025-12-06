@@ -92,7 +92,10 @@ class HybridTradingEngine:
             else:
                 # 신호 부족 → ML 보조 사용
                 if self.ml_predictor:
-                    ml_signal = self.ml_predictor.infer({'market': market})
+                    # DataFrame에서 최근 24개 시퀀스 생성
+                    sequence = self._create_sequence_from_df(df, market)
+                    logger.info(f"[Hybrid] {market} ML fallback - sequence shape: {sequence.shape if sequence is not None else 'None'}")
+                    ml_signal = self.ml_predictor.infer({'market': market, 'sequence': sequence})
                     ml_conf = max(ml_signal.buy_probability, ml_signal.sell_probability)
                     if ml_conf > 0.6:
                         return ml_signal.action, ml_conf, {
@@ -115,7 +118,9 @@ class HybridTradingEngine:
             ml_adjustment = "none"
             
             if self.ml_predictor:
-                ml_signal = self.ml_predictor.infer({'market': market})
+                # DataFrame에서 최근 24개 시퀀스 생성
+                sequence = self._create_sequence_from_df(df, market)
+                ml_signal = self.ml_predictor.infer({'market': market, 'sequence': sequence})
                 ml_action = ml_signal.action
                 ml_conf = max(ml_signal.buy_probability, ml_signal.sell_probability)
                 
@@ -260,6 +265,47 @@ class HybridTradingEngine:
         """.strip()
         
         return summary
+    
+    def _create_sequence_from_df(self, df: pd.DataFrame, market: str) -> np.ndarray:
+        """
+        DataFrame에서 최근 24시간 시퀀스 생성
+        
+        Args:
+            df: OHLCV 데이터프레임 (기술적 지표 포함)
+            market: 마켓 이름
+        
+        Returns:
+            (24, 46) 형태의 시퀀스 또는 None
+        """
+        try:
+            if len(df) < 24:
+                logger.warning(f"{market}: 시퀀스 생성 실패 - 데이터 부족 ({len(df)} < 24)")
+                return None
+            
+            # 특성 컬럼 선택 (기본 OHLCV + 기술적 지표)
+            feature_cols = ['open', 'high', 'low', 'close', 'volume']
+            
+            # RSI, MACD 등 있으면 추가
+            for col in ['rsi', 'macd', 'macd_signal', 'bb_upper', 'bb_middle', 'bb_lower', 
+                       'volume_ma', 'price_ma_5', 'price_ma_20', 'atr']:
+                if col in df.columns:
+                    feature_cols.append(col)
+            
+            # 최근 24개 선택
+            recent = df[feature_cols].tail(24).values
+            
+            # 46개 특성으로 패딩 (부족하면 0으로)
+            if recent.shape[1] < 46:
+                padding = np.zeros((24, 46 - recent.shape[1]))
+                sequence = np.hstack([recent, padding])
+            else:
+                sequence = recent[:, :46]
+            
+            return sequence.astype(np.float32)
+            
+        except Exception as e:
+            logger.error(f"{market}: 시퀀스 생성 오류 - {e}")
+            return None
 
 
 # 편의 함수
