@@ -23,9 +23,9 @@ class EnhancedTradingEngine:
         # Hybrid engine (Layer 1)
         try:
             from app.trading.hybrid_engine import HybridTradingEngine
-            from app.ml.predictor import Predictor
+            from app.ml.predictor import HybridPredictor
             
-            ml_predictor = Predictor()
+            ml_predictor = HybridPredictor()
             self.hybrid_engine = HybridTradingEngine(ml_predictor=ml_predictor)
             self.has_hybrid = True
             logger.info("✅ Hybrid engine loaded")

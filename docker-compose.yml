@@ -30,6 +30,8 @@ services:
       - "8000:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend/data:/app/data
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
@@ -43,6 +45,8 @@ services:
       - redis
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend/data:/app/data
     command: celery -A app.celery_app.celery_app worker --loglevel=info
 
   scheduler:

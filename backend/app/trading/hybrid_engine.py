@@ -92,13 +92,14 @@ class HybridTradingEngine:
             else:
                 # 신호 부족 → ML 보조 사용
                 if self.ml_predictor:
-                    ml_action, ml_conf, ml_details = self.ml_predictor.predict(market)
+                    ml_signal = self.ml_predictor.infer({'market': market})
+                    ml_conf = max(ml_signal.buy_probability, ml_signal.sell_probability)
                     if ml_conf > 0.6:
-                        return ml_action, ml_conf, {
+                        return ml_signal.action, ml_conf, {
                             'source': 'ml_fallback',
                             'buy_signals': buy_signals,
                             'sell_signals': sell_signals,
-                            'ml_details': ml_details,
+                            'ml_details': {'buy_prob': ml_signal.buy_probability, 'sell_prob': ml_signal.sell_probability},
                         }
                 
                 # ML도 없거나 신뢰도 낮음
@@ -114,7 +115,9 @@ class HybridTradingEngine:
             ml_adjustment = "none"
             
             if self.ml_predictor:
-                ml_action, ml_conf, ml_details = self.ml_predictor.predict(market)
+                ml_signal = self.ml_predictor.infer({'market': market})
+                ml_action = ml_signal.action
+                ml_conf = max(ml_signal.buy_probability, ml_signal.sell_probability)
                 
                 if ml_action != action and ml_conf > 0.7:
                     # ML이 강하게 반대 → 신중

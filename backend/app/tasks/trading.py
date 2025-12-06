@@ -10,6 +10,7 @@ from app.ml.feature_builder import build_features_from_market_data
 from app.services.data_pipeline import HistoricalDataService
 from app.services.trading.emergency_trader import EmergencyTrader
 from app.trading.engine import TradeExecutor, TradingEngine
+from app.trading.enhanced_engine import get_enhanced_engine
 from app.models.trading import AutoTradingConfig
 
 logger = get_logger(__name__)
@@ -54,6 +55,9 @@ async def run_cycle() -> None:
 
     engine = TradingEngine(settings)
     executor = TradeExecutor(settings)
+    
+    # Enhanced Engine (Hybrid + MultiTF) 사용
+    enhanced_engine = get_enhanced_engine()
 
     db: Session = SessionLocal()
     try:
@@ -66,17 +70,73 @@ async def run_cycle() -> None:
                     logger.warning(f"Insufficient data for {market}: {len(market_data)} rows (need 150+)")
                     continue
                 
-                # 특징 생성
-                features = build_features_from_market_data(market_data, market)
-                
-                # 거래 결정
-                decision = await engine.decide(db, market, features, account_info)
-                
-                # 결정 로깅
-                if decision.approved:
-                    logger.info(f"📝 {market}: {decision.action} (투자비율: {decision.investment_ratio*100:.0f}%) - {decision.rationale[:100]}")
+                # Enhanced Engine 사용 가능 여부 확인
+                if enhanced_engine.is_available():
+                    # market_data를 DataFrame으로 변환
+                    import pandas as pd
+                    df = pd.DataFrame(market_data)
+                    
+                    # Enhanced Engine으로 거래 신호 생성 (Hybrid + MultiTF)
+                    action, confidence, details = enhanced_engine.get_enhanced_signal(market, df)
+                    
+                    if action != "HOLD":
+                        # 신뢰도 기반 투자 비율 설정
+                        if confidence >= 0.85:
+                            investment_ratio = 0.5
+                        elif confidence >= 0.75:
+                            investment_ratio = 0.3
+                        elif confidence >= 0.65:
+                            investment_ratio = 0.2
+                        else:
+                            investment_ratio = 0.1
+                        
+                        # SELL은 전량 매도
+                        if action == "SELL":
+                            investment_ratio = 1.0
+                        
+                        # TradeDecisionResult 생성
+                        from app.trading.engine import TradeDecisionResult
+                        decision = TradeDecisionResult(
+                            approved=True,
+                            action=action,
+                            market=market,
+                            confidence=confidence,
+                            rationale=f"Enhanced Engine: {details.get('rationale', 'Multi-layer signal')}",
+                            emergency=False,
+                            investment_ratio=investment_ratio,
+                            max_loss_acceptable=0.03,
+                            take_profit_target=0.05,
+                        )
+                        
+                        logger.info(f"🚀 Enhanced: {market} {action} ({confidence:.1%}) - {details.get('rationale', '')[:80]}")
+                    else:
+                        # HOLD 신호
+                        from app.trading.engine import TradeDecisionResult
+                        decision = TradeDecisionResult(
+                            approved=False,
+                            action="HOLD",
+                            market=market,
+                            confidence=confidence,
+                            rationale=details.get('rationale', 'Enhanced Engine: No strong signal'),
+                            emergency=False,
+                            investment_ratio=0.0,
+                            max_loss_acceptable=0.03,
+                            take_profit_target=0.05,
+                        )
+                        logger.debug(f"⏸️ Enhanced: {market} HOLD ({confidence:.1%})")
                 else:
-                    logger.info(f"⏸️ {market}: HOLD - {decision.rationale[:100]}")
+                    # Enhanced Engine 사용 불가 시 기존 ML 방식 사용
+                    # 특징 생성
+                    features = build_features_from_market_data(market_data, market)
+                    
+                    # 거래 결정
+                    decision = await engine.decide(db, market, features, account_info)
+                    
+                    # 결정 로깅
+                    if decision.approved:
+                        logger.info(f"📝 {market}: {decision.action} (투자비율: {decision.investment_ratio*100:.0f}%) - {decision.rationale[:100]}")
+                    else:
+                        logger.info(f"⏸️ {market}: HOLD - {decision.rationale[:100]}")
                 
                 # 거래 실행
                 executor.execute(db, decision, account_info["available_balance"])

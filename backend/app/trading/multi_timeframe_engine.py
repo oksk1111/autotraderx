@@ -27,7 +27,12 @@ class MultiTimeframeEngine:
         Args:
             data_dir: 멀티 타임프레임 데이터 디렉토리
         """
-        self.data_dir = Path(data_dir)
+        import os
+        # Docker 볼륨 마운트 경로 확인 (worker 컨테이너는 backend/ 서브디렉토리에 마운트됨)
+        if os.path.exists("/app/backend/data/raw"):
+            self.data_dir = Path("/app/backend/data/raw")
+        else:
+            self.data_dir = Path(data_dir)
         
         # 트렌드 판단 임계값
         self.trend_thresholds = {
@@ -106,7 +111,9 @@ class MultiTimeframeEngine:
         Returns:
             DataFrame 또는 None
         """
-        file_path = self.data_dir / f"{market}_{interval}.csv"
+        # 마켓 코드의 하이픈을 언더스코어로 변환 (KRW-BTC -> KRW_BTC)
+        market_name = market.replace('-', '_')
+        file_path = self.data_dir / f"{market_name}_{interval}.csv"
         
         if not file_path.exists():
             logger.warning(f"[MultiTF] 파일 없음: {file_path}")
