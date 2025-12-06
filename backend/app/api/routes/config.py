@@ -30,7 +30,7 @@ def update_config(payload: AutoTradingConfigSchema, db: Session = Depends(get_db
         db.add(config)
     
     # 매매 주기가 변경되었는지 확인
-    old_cycle = getattr(config, 'trading_cycle_seconds', 300)
+    old_cycle = getattr(config, 'trading_cycle_seconds', 60)
     new_cycle = payload.trading_cycle_seconds
     cycle_changed = old_cycle != new_cycle
     

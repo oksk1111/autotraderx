@@ -30,7 +30,7 @@ class AutoTradingConfig(Base, TimestampMixin):
     take_profit_percent: Mapped[float] = mapped_column(Float, default=5.0)
     max_positions: Mapped[int] = mapped_column(Integer, default=3)
     default_trade_amount: Mapped[float] = mapped_column(Float, default=50_000.0)
-    trading_cycle_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    trading_cycle_seconds: Mapped[int] = mapped_column(Integer, default=60)
 
 
 class TradePosition(Base, TimestampMixin):

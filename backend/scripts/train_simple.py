@@ -219,4 +219,4 @@ def train_lightgbm_model(market="KRW-BTC", interval="1h"):
 
 
 if __name__ == "__main__":
-    train_lightgbm_model(market="KRW-BTC", interval="1h")
+    train_lightgbm_model(market="KRW-BTC", interval="minute60")

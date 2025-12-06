@@ -23,7 +23,7 @@ class AutoTradingConfigSchema(BaseModel):
     take_profit_percent: float = 5.0
     max_positions: int = 3
     default_trade_amount: float = 50_000
-    trading_cycle_seconds: int = 300
+    trading_cycle_seconds: int = 60
 
 
 class TradeLogSchema(BaseModel):

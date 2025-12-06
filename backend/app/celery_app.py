@@ -20,7 +20,7 @@ celery_app = Celery(
 beat_schedule = {
     'trading-cycle-scalping': {
         'task': 'app.celery_app.run_trading_cycle',
-        'schedule': float(settings.trading_cycle_seconds),  # 환경변수로 설정 가능 (기본값: 5분)
+        'schedule': float(settings.trading_cycle_seconds),  # 환경변수로 설정 가능 (기본값: 1분, v4.0)
     },
     'emergency-trading-check': {
         'task': 'app.celery_app.run_emergency_check',

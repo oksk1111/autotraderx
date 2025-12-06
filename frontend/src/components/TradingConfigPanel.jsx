@@ -5,10 +5,10 @@ import axios from "axios";
 const api = axios.create({ baseURL: "/api" });
 
 const CYCLE_PRESETS = [
-  { label: "1분 (공격적)", value: 60, color: "#f44336" },
+  { label: "1분 (권장 v4.0)", value: 60, color: "#4caf50" },
   { label: "3분 (빠른 대응)", value: 180, color: "#ff9800" },
-  { label: "5분 (권장)", value: 300, color: "#4caf50" },
-  { label: "10분 (보수적)", value: 600, color: "#2196f3" },
+  { label: "5분 (안정)", value: 300, color: "#2196f3" },
+  { label: "10분 (보수적)", value: 600, color: "#9e9e9e" },
   { label: "30분", value: 1800, color: "#9e9e9e" },
   { label: "1시간", value: 3600, color: "#9e9e9e" },
 ];
@@ -73,7 +73,7 @@ function TradingConfigPanel() {
     );
   }
 
-  const currentCycle = config?.trading_cycle_seconds || 300;
+  const currentCycle = config?.trading_cycle_seconds || 60;
   const isActive = config?.is_active || false;
 
   return (

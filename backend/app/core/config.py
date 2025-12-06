@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     max_position_hold_minutes: int = 30  # 최대 포지션 보유 시간 (30분)
     
     # 매매 주기 설정 (초단위, 기본값: 5분)
-    trading_cycle_seconds: int = 300
+    trading_cycle_seconds: int = 60
     
     # 공격적 매매 모드 설정
     aggressive_trading_mode: bool = True  # True: tick 단위 공격적 매매 활성화
