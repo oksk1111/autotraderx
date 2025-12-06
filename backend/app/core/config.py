@@ -32,22 +32,33 @@ class Settings(BaseSettings):
     upbit_access_key: str = ""
     upbit_secret_key: str = ""
 
+    # AI/LLM 설정 (ML 우선, LLM은 선택적)
+    use_ai_verification: bool = False  # ML 기반 거래로 전환
+    use_groq: bool = False  # Groq API rate limit 문제로 비활성화
+    use_ollama: bool = False  # 필요시 활성화 (현재는 ML만 사용)
     groq_api_key: str = ""
-    groq_model: str = "llama-3.1-70b-versatile"
+    groq_model: str = "llama-3.3-70b-versatile"
     ollama_base_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "qwen2.5:7b"
+    ollama_timeout: float = 5.0  # Ollama 타임아웃 단축 (20s → 5s)
 
     secret_key: str = "change_me"
     encryption_key: str = "change_me"
 
     default_trade_amount: float = 50_000
     max_open_positions: int = 3
-    stop_loss_percent: float = 3.0
-    take_profit_percent: float = 5.0
-    use_ai_verification: bool = True
+    stop_loss_percent: float = 2.0  # 워뇨띠 스타일: -2% 손절
+    take_profit_percent: float = 2.0  # 워뇨띠 스타일: +2% 익절
+    max_position_hold_minutes: int = 30  # 최대 포지션 보유 시간 (30분)
     
     # 매매 주기 설정 (초단위, 기본값: 5분)
     trading_cycle_seconds: int = 300
+    
+    # 공격적 매매 모드 설정
+    aggressive_trading_mode: bool = True  # True: tick 단위 공격적 매매 활성화
+    tick_interval_seconds: int = 60  # tick 매매 주기 (초단위, 기본값: 1분)
+    tick_min_confidence: float = 0.7  # tick 매매 최소 신뢰도 (기본값: 70%)
+    tick_max_positions: int = 5  # tick 매매 최대 동시 포지션 수
 
     tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL"]
 

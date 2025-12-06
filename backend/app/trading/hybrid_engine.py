@@ -1,0 +1,273 @@
+"""
+하이브리드 트레이딩 엔진 (Layer 1)
+기술적 지표 중심 + ML 보조 역할
+
+빠른 반응(1초)으로 워뇨띠 스타일 단타 지원
+"""
+import logging
+from typing import Dict, Tuple
+import pandas as pd
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+class HybridTradingEngine:
+    """
+    기술적 지표 기반 빠른 매매 판단
+    ML 모델은 보조 검증 역할만 수행
+    """
+    
+    def __init__(self, ml_predictor=None):
+        """
+        Args:
+            ml_predictor: 선택적 ML 예측기 (검증용)
+        """
+        self.ml_predictor = ml_predictor
+        
+        # 기술적 지표 임계값
+        self.thresholds = {
+            'rsi_oversold': 30,      # RSI 과매도
+            'rsi_overbought': 70,    # RSI 과매수
+            'volume_surge': 2.0,     # 거래량 급등 (평균 대비)
+            'bb_lower': 0.2,         # 볼린저 하단 (0~1)
+            'bb_upper': 0.8,         # 볼린저 상단
+            'macd_threshold': 0.0,   # MACD 골든크로스
+        }
+        
+        # 신호 가중치
+        self.weights = {
+            'rsi': 0.25,
+            'macd': 0.25,
+            'volume': 0.25,
+            'bollinger': 0.25,
+        }
+    
+    def analyze(self, market: str, df: pd.DataFrame) -> Tuple[str, float, Dict]:
+        """
+        시장 분석 및 매매 신호 생성
+        
+        Args:
+            market: 마켓 코드 (예: KRW-BTC)
+            df: OHLCV + 기술적 지표 데이터프레임
+        
+        Returns:
+            (action, confidence, details)
+            - action: "BUY", "SELL", "HOLD"
+            - confidence: 0.0 ~ 1.0
+            - details: 분석 상세 정보
+        """
+        try:
+            # 최신 데이터
+            latest = df.iloc[-1]
+            
+            # 1. 기술적 지표 분석
+            buy_signals, sell_signals = self._analyze_technical_indicators(latest)
+            
+            # 2. 신호 강도 계산
+            buy_strength = sum(buy_signals.values())
+            sell_strength = sum(sell_signals.values())
+            
+            # 3. 기본 판단
+            if buy_strength >= 3:
+                # 강한 매수 신호 (3개 이상)
+                action = "BUY"
+                base_confidence = 0.85
+                reason = f"강한 매수 신호 {buy_strength}개 감지"
+            elif buy_strength >= 2:
+                # 중간 매수 신호 (2개)
+                action = "BUY"
+                base_confidence = 0.65
+                reason = f"매수 신호 {buy_strength}개 감지"
+            elif sell_strength >= 3:
+                # 강한 매도 신호 (3개 이상)
+                action = "SELL"
+                base_confidence = 0.85
+                reason = f"강한 매도 신호 {sell_strength}개 감지"
+            elif sell_strength >= 2:
+                # 중간 매도 신호 (2개)
+                action = "SELL"
+                base_confidence = 0.65
+                reason = f"매도 신호 {sell_strength}개 감지"
+            else:
+                # 신호 부족 → ML 보조 사용
+                if self.ml_predictor:
+                    ml_action, ml_conf, ml_details = self.ml_predictor.predict(market)
+                    if ml_conf > 0.6:
+                        return ml_action, ml_conf, {
+                            'source': 'ml_fallback',
+                            'buy_signals': buy_signals,
+                            'sell_signals': sell_signals,
+                            'ml_details': ml_details,
+                        }
+                
+                # ML도 없거나 신뢰도 낮음
+                return "HOLD", 0.3, {
+                    'source': 'insufficient_signals',
+                    'buy_signals': buy_signals,
+                    'sell_signals': sell_signals,
+                    'reason': '충분한 신호 없음',
+                }
+            
+            # 4. ML 검증 (선택적)
+            final_confidence = base_confidence
+            ml_adjustment = "none"
+            
+            if self.ml_predictor:
+                ml_action, ml_conf, ml_details = self.ml_predictor.predict(market)
+                
+                if ml_action != action and ml_conf > 0.7:
+                    # ML이 강하게 반대 → 신중
+                    final_confidence *= 0.6
+                    ml_adjustment = "reduced"
+                    reason += f" (ML 반대 의견으로 신뢰도 감소)"
+                elif ml_action == action:
+                    # ML이 동의 → 강화
+                    final_confidence = min(0.95, final_confidence * 1.1)
+                    ml_adjustment = "enhanced"
+                    reason += f" (ML 동의로 신뢰도 증가)"
+            
+            # 5. 상세 정보
+            details = {
+                'source': 'hybrid',
+                'action': action,
+                'base_confidence': base_confidence,
+                'final_confidence': final_confidence,
+                'buy_signals': buy_signals,
+                'sell_signals': sell_signals,
+                'buy_strength': buy_strength,
+                'sell_strength': sell_strength,
+                'ml_adjustment': ml_adjustment,
+                'reason': reason,
+                'latest_indicators': {
+                    'rsi': float(latest.get('rsi', 0)),
+                    'macd': float(latest.get('macd', 0)),
+                    'volume': float(latest.get('volume', 0)),
+                    'close': float(latest.get('close', 0)),
+                }
+            }
+            
+            logger.info(
+                f"[HybridEngine] {market} - {action} ({final_confidence:.1%}): {reason}"
+            )
+            
+            return action, final_confidence, details
+            
+        except Exception as e:
+            logger.error(f"[HybridEngine] 분석 실패 ({market}): {e}")
+            return "HOLD", 0.0, {'error': str(e)}
+    
+    def _analyze_technical_indicators(self, row: pd.Series) -> Tuple[Dict, Dict]:
+        """
+        기술적 지표 분석
+        
+        Returns:
+            (buy_signals, sell_signals)
+            각각 {'indicator': 1 or 0} 형태
+        """
+        buy_signals = {}
+        sell_signals = {}
+        
+        # 1. RSI (Relative Strength Index)
+        rsi = row.get('rsi', 50)
+        if rsi < self.thresholds['rsi_oversold']:
+            buy_signals['rsi'] = 1  # 과매도 → 매수
+        elif rsi > self.thresholds['rsi_overbought']:
+            sell_signals['rsi'] = 1  # 과매수 → 매도
+        else:
+            buy_signals['rsi'] = 0
+            sell_signals['rsi'] = 0
+        
+        # 2. MACD (Moving Average Convergence Divergence)
+        macd = row.get('macd', 0)
+        macd_signal = row.get('macd_signal', 0)
+        macd_diff = macd - macd_signal
+        
+        if macd_diff > self.thresholds['macd_threshold'] and macd_diff > 0:
+            buy_signals['macd'] = 1  # 골든크로스 → 매수
+        elif macd_diff < -self.thresholds['macd_threshold'] and macd_diff < 0:
+            sell_signals['macd'] = 1  # 데드크로스 → 매도
+        else:
+            buy_signals['macd'] = 0
+            sell_signals['macd'] = 0
+        
+        # 3. Volume Surge (거래량 급등)
+        volume = row.get('volume', 0)
+        volume_ma = row.get('volume_ma_20', 1)
+        
+        if volume_ma > 0:
+            volume_ratio = volume / volume_ma
+            if volume_ratio > self.thresholds['volume_surge']:
+                # 거래량 급등 → 추세 시작 가능성
+                # RSI와 조합해서 방향 결정
+                if rsi < 50:
+                    buy_signals['volume'] = 1  # 저점 + 거래량 → 매수
+                elif rsi > 50:
+                    sell_signals['volume'] = 1  # 고점 + 거래량 → 매도
+                else:
+                    buy_signals['volume'] = 0
+                    sell_signals['volume'] = 0
+            else:
+                buy_signals['volume'] = 0
+                sell_signals['volume'] = 0
+        else:
+            buy_signals['volume'] = 0
+            sell_signals['volume'] = 0
+        
+        # 4. Bollinger Bands (볼린저 밴드)
+        bb_position = row.get('bb_position', 0.5)  # 0~1 (하단~상단)
+        
+        if bb_position < self.thresholds['bb_lower']:
+            buy_signals['bollinger'] = 1  # 하단 터치 → 매수
+        elif bb_position > self.thresholds['bb_upper']:
+            sell_signals['bollinger'] = 1  # 상단 터치 → 매도
+        else:
+            buy_signals['bollinger'] = 0
+            sell_signals['bollinger'] = 0
+        
+        return buy_signals, sell_signals
+    
+    def get_signal_summary(self, market: str, df: pd.DataFrame) -> str:
+        """
+        사람이 읽기 쉬운 신호 요약
+        
+        Returns:
+            요약 문자열
+        """
+        action, confidence, details = self.analyze(market, df)
+        
+        buy_signals = details.get('buy_signals', {})
+        sell_signals = details.get('sell_signals', {})
+        
+        buy_count = sum(buy_signals.values())
+        sell_count = sum(sell_signals.values())
+        
+        active_buy = [k for k, v in buy_signals.items() if v == 1]
+        active_sell = [k for k, v in sell_signals.items() if v == 1]
+        
+        summary = f"""
+=== {market} 하이브리드 분석 ===
+행동: {action}
+신뢰도: {confidence:.1%}
+
+매수 신호 ({buy_count}개): {', '.join(active_buy) if active_buy else '없음'}
+매도 신호 ({sell_count}개): {', '.join(active_sell) if active_sell else '없음'}
+
+판단: {details.get('reason', '-')}
+        """.strip()
+        
+        return summary
+
+
+# 편의 함수
+def create_hybrid_engine(ml_predictor=None):
+    """
+    하이브리드 엔진 생성
+    
+    Usage:
+        from app.ml.predictor import Predictor
+        ml = Predictor()
+        engine = create_hybrid_engine(ml)
+        action, conf, details = engine.analyze("KRW-BTC", df)
+    """
+    return HybridTradingEngine(ml_predictor=ml_predictor)

@@ -12,15 +12,20 @@ from app.llm.ollama_client import OllamaClient
 class DualLLMVerifier:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
-        self.groq = GroqClient(self.settings)
-        self.ollama = OllamaClient(self.settings)
+        # 설정에 따라 선택적으로 LLM 초기화
+        self.groq = GroqClient(self.settings) if getattr(self.settings, 'use_groq', False) else None
+        self.ollama = OllamaClient(self.settings) if getattr(self.settings, 'use_ollama', False) else None
 
-    async def verify(self, summary: str) -> tuple[bool, bool]:
-        return await self.groq.safe_verify(summary), await self.ollama.safe_verify(summary)
+    async def verify(self, summary: str) -> tuple[bool | None, bool | None]:
+        """LLM 검증 (설정에 따라 사용/미사용)"""
+        groq_result = await self.groq.safe_verify(summary) if self.groq else None
+        ollama_result = await self.ollama.safe_verify(summary) if self.ollama else None
+        return groq_result, ollama_result
 
     async def approve(self, summary: str) -> bool:
         groq_ok, ollama_ok = await self.verify(summary)
-        return groq_ok and ollama_ok
+        # None은 False로 처리
+        return bool(groq_ok and ollama_ok)
     
     async def decide_investment_ratio(
         self,
@@ -29,21 +34,26 @@ class DualLLMVerifier:
         market_info: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        LLM을 사용하여 투자 비율을 결정합니다.
-        
-        Args:
-            ml_signal: ML 모델의 예측 결과
-            account_info: 계좌 정보 (원금, 가용자금, 포지션 등)
-            market_info: 시장 정보 (변동성, 히스토리 등)
-            
-        Returns:
-            {
-                "investment_ratio": float,  # 0.0 ~ 1.0
-                "reasoning": str,
-                "max_loss_acceptable": float,
-                "take_profit_target": float
-            }
+        투자 비율을 결정합니다. (Groq 비활성화 시 ML 신뢰도 기반)
         """
+        # Groq 비활성화 시 ML 신뢰도 기반 폴백
+        if not self.groq:
+            confidence = ml_signal.get('confidence', 0)
+            if confidence >= 0.8:
+                ratio = 0.3
+            elif confidence >= 0.7:
+                ratio = 0.2
+            elif confidence >= 0.6:
+                ratio = 0.15
+            else:
+                ratio = 0.1
+            return {
+                "investment_ratio": ratio,
+                "reasoning": f"ML 신뢰도 기반 {ratio*100:.0f}% 투자 (Groq 비활성화)",
+                "max_loss_acceptable": 0.03,
+                "take_profit_target": 0.05
+            }
+        
         prompt = self._build_investment_prompt(ml_signal, account_info, market_info)
         
         # Groq로 빠른 결정

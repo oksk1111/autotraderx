@@ -35,14 +35,36 @@ class GroqClient:
             logger.debug("Groq verification response: %s", data)
             return data
 
-    async def safe_verify(self, summary: str) -> bool:
+    async def safe_verify(self, summary: str) -> bool | None:
+        """
+        LLM 검증 수행
+        
+        Returns:
+            True: 승인
+            False: 거부
+            None: 응답 실패 (타임아웃, 에러 등)
+        """
         try:
             data = await self.verify(summary)
             content = data["choices"][0]["message"]["content"].lower()
-            return any(keyword in content for keyword in ["approve", "buy", "sell", "execute"])
+            
+            # 승인 키워드 확인
+            if any(keyword in content for keyword in ["approve", "buy", "sell", "execute", "yes"]):
+                logger.info("Groq: ✅ 승인")
+                return True
+            
+            # 거부 키워드 확인
+            if any(keyword in content for keyword in ["reject", "no", "deny", "decline"]):
+                logger.info(f"Groq: ❌ 거부 - {content[:100]}")
+                return False
+            
+            # 모호한 응답은 승인으로 처리 (보수적)
+            logger.warning(f"Groq: ⚠️ 모호한 응답, 승인 처리 - {content[:100]}")
+            return True
+            
         except RetryError:
-            logger.warning("Groq verification failed after retries")
-            return False
+            logger.warning("⚠️ Groq: 재시도 후 실패 (None 반환)")
+            return None  # 실패
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Groq verification error: %s", exc)
-            return False
+            logger.error(f"⚠️ Groq: 에러 발생 (None 반환) - {exc}")
+            return None  # 실패

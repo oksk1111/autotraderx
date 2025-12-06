@@ -114,33 +114,40 @@ def save_data(df: pd.DataFrame, market: str, interval: str):
 
 def main():
     """
-    메인 실행 함수
+    메인 실행 함수 - 멀티 타임프레임 데이터 수집
     """
     print("=" * 60)
-    print("Starting data collection...")
+    print("Starting multi-timeframe data collection...")
     print(f"Markets: {MARKETS}")
     print(f"Data directory: {DATA_DIR}")
     print("=" * 60)
     print()
     
+    # 수집할 타임프레임 설정
+    timeframes = [
+        ("minute5", 288 * 7),    # 5분봉: 7일치 (288개/일)
+        ("minute15", 96 * 14),   # 15분봉: 14일치 (96개/일)
+        ("minute60", 24 * 90),   # 1시간봉: 90일치 (24개/일)
+        ("day", 365),            # 일봉: 1년치
+    ]
+    
     for market in MARKETS:
+        print(f"\n{'=' * 60}")
+        print(f"Collecting data for {market}")
+        print(f"{'=' * 60}")
+        
         try:
-            # 1시간 봉 데이터 수집 (1년치: 365*24 = 8760개)
-            df_1h = collect_ohlcv_data(market, interval="minute60", count=8760)
-            if df_1h is not None:
-                save_data(df_1h, market, "1h")
-            
-            # 일봉 데이터 수집 (1년치: 365개)
-            df_1d = collect_ohlcv_data(market, interval="day", count=365)
-            if df_1d is not None:
-                save_data(df_1d, market, "1d")
+            for interval, count in timeframes:
+                df = collect_ohlcv_data(market, interval=interval, count=count)
+                if df is not None:
+                    save_data(df, market, interval)
                 
         except Exception as e:
             print(f"Failed to collect data for {market}: {e}")
             continue
     
-    print("=" * 60)
-    print("Data collection completed!")
+    print("\n" + "=" * 60)
+    print("Multi-timeframe data collection completed!")
     print("=" * 60)
 
 

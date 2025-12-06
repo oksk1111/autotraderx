@@ -72,6 +72,12 @@ async def run_cycle() -> None:
                 # 거래 결정
                 decision = await engine.decide(db, market, features, account_info)
                 
+                # 결정 로깅
+                if decision.approved:
+                    logger.info(f"📝 {market}: {decision.action} (투자비율: {decision.investment_ratio*100:.0f}%) - {decision.rationale[:100]}")
+                else:
+                    logger.info(f"⏸️ {market}: HOLD - {decision.rationale[:100]}")
+                
                 # 거래 실행
                 executor.execute(db, decision, account_info["available_balance"])
                 
@@ -137,5 +143,125 @@ async def run_emergency_check() -> None:
             
     except Exception as e:
         logger.error(f"Error in emergency trading check: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
+async def run_tick_cycle() -> None:
+    """
+    Tick 단위 공격적 매매 (1분 단위)
+    - ML 신호만으로 빠른 매매 실행
+    - LLM 검증 없이 신뢰도 기반 즉시 진입/청산
+    - 최소 신뢰도 이상일 때만 거래
+    """
+    if not settings.aggressive_trading_mode:
+        return
+    
+    logger.debug("🚀 Starting tick trading cycle")
+    
+    db: Session = SessionLocal()
+    try:
+        # 자동매매 활성화 여부 확인
+        config = db.query(AutoTradingConfig).order_by(AutoTradingConfig.id.desc()).first()
+        if not config or not config.is_active:
+            logger.debug("Auto trading is not active, skipping tick cycle")
+            return
+        
+        # Upbit 계정 정보 가져오기
+        upbit = pyupbit.Upbit(settings.upbit_access_key, settings.upbit_secret_key)
+        balances = upbit.get_balances()
+        krw_balance = float(upbit.get_balance("KRW") or 0)  # type: ignore
+        
+        # 현재 포지션 수 확인
+        open_positions = len([b for b in balances if b['currency'] != 'KRW'])
+        
+        # 최대 포지션 수 제한 체크
+        if open_positions >= settings.tick_max_positions:
+            logger.debug(f"Max positions reached ({open_positions}/{settings.tick_max_positions}), skipping tick cycle")
+            return
+        
+        # 원금과 현재 자산 계산
+        total_value = krw_balance
+        for balance in balances:
+            if balance['currency'] != 'KRW':
+                ticker = f"KRW-{balance['currency']}"
+                current_price = pyupbit.get_current_price(ticker)
+                if current_price and isinstance(current_price, (int, float)):
+                    total_value += float(balance['balance']) * float(current_price)
+        
+        account_info = {
+            "principal": total_value,
+            "available_balance": krw_balance,
+            "open_positions": open_positions,
+            "avg_return": 0.0,
+            "consecutive_losses": 0,
+        }
+        
+        markets = settings.tracked_markets
+        data_service = HistoricalDataService(markets)
+        
+        # 최근 데이터 가져오기 (짧은 시퀀스 사용)
+        market_data_dict = await data_service.fetch_recent()
+        
+        engine = TradingEngine(settings)
+        executor = TradeExecutor(settings)
+        
+        for market in markets:
+            try:
+                market_data = market_data_dict.get(market, [])
+                
+                if len(market_data) < 150:
+                    logger.debug(f"Insufficient data for {market}: {len(market_data)} rows")
+                    continue
+                
+                # 특징 생성
+                features = build_features_from_market_data(market_data, market)
+                
+                # ML 신호만 사용 (LLM 검증 없이)
+                ml_signal = engine.predictor.infer({"market": market, **features})
+                
+                # 최소 신뢰도 체크
+                confidence = max(ml_signal.buy_probability, ml_signal.sell_probability)
+                if confidence < settings.tick_min_confidence:
+                    logger.debug(f"{market} tick skip: confidence {confidence:.1%} < {settings.tick_min_confidence:.1%}")
+                    continue
+                
+                # 신뢰도 기반 투자 비율 (더 공격적)
+                if confidence >= 0.85:
+                    investment_ratio = 0.5  # 매우 높은 신뢰도: 50%
+                elif confidence >= 0.75:
+                    investment_ratio = 0.3  # 높은 신뢰도: 30%
+                else:
+                    investment_ratio = 0.15  # 중간 신뢰도: 15%
+                
+                # SELL 신호는 항상 전량 매도
+                if ml_signal.action == "SELL":
+                    investment_ratio = 1.0
+                
+                # 거래 결정 생성 (LLM 승인 없이)
+                from app.trading.engine import TradeDecisionResult
+                decision = TradeDecisionResult(
+                    approved=(ml_signal.action != "HOLD"),
+                    action=ml_signal.action,
+                    market=market,
+                    confidence=confidence,
+                    rationale=f"🚀 Tick trading: ML {confidence:.1%} confidence (no LLM)",
+                    emergency=False,
+                    investment_ratio=investment_ratio,
+                    max_loss_acceptable=0.02,  # 더 타이트한 손절
+                    take_profit_target=0.03,  # 더 빠른 익절
+                )
+                
+                # 거래 실행
+                if decision.approved:
+                    executor.execute(db, decision, account_info["available_balance"])
+                    logger.info(f"⚡ Tick trade: {market} {ml_signal.action} at {confidence:.1%} confidence, {investment_ratio*100:.0f}% position")
+                
+            except Exception as e:
+                logger.error(f"Error in tick trading for {market}: {e}", exc_info=True)
+                continue
+                
+    except Exception as e:
+        logger.error(f"Error in tick trading cycle: {e}", exc_info=True)
     finally:
         db.close()

@@ -10,6 +10,7 @@ from app.core.logging import get_logger
 from app.llm.verifier import DualLLMVerifier
 from app.ml.predictor import HybridPredictor
 from app.models import AutoTradingConfig, MLDecisionLog, TradeLog
+from app.services.signal_filter import SignalFilter
 from app.trading.emergency import EmergencyGuard
 
 logger = get_logger(__name__)
@@ -34,6 +35,7 @@ class TradingEngine:
         self.predictor = HybridPredictor(settings=self.settings)
         self.verifier = DualLLMVerifier(self.settings)
         self.guard = EmergencyGuard(self.settings)
+        self.signal_filter = SignalFilter(self.settings)
 
     async def decide(self, db: Session, market: str, features: Dict[str, float], account_info: Dict[str, Any] | None = None) -> TradeDecisionResult:
         config = db.query(AutoTradingConfig).first()
@@ -41,6 +43,15 @@ class TradingEngine:
             return TradeDecisionResult(False, "HOLD", market, 0.0, "System inactive", False)
 
         ml_signal = self.predictor.infer({"market": market, **features})
+        logger.info(f"🤖 {market} ML 예측: {ml_signal.action} (Buy: {ml_signal.buy_probability:.1%}, Sell: {ml_signal.sell_probability:.1%}, Confidence: {max(ml_signal.buy_probability, ml_signal.sell_probability):.1%})")
+        
+        # 신호 필터링: 연속 신호 차단 (단, 고신뢰도는 허용)
+        confidence = max(ml_signal.buy_probability, ml_signal.sell_probability)
+        signal_allowed, filter_reason = self.signal_filter.should_allow_trade(market, ml_signal.action, confidence)
+        if not signal_allowed:
+            logger.info(f"⏸️ {market}: {filter_reason}")
+            return TradeDecisionResult(False, "HOLD", market, 0.0, filter_reason, False)
+        
         summary = self._build_summary(market, ml_signal)
 
         emergency = self.guard.tripped(ml_signal, features)
@@ -49,23 +60,67 @@ class TradingEngine:
             return TradeDecisionResult(
                 True, "SELL", market, ml_signal.sell_probability, 
                 "Emergency detected", True,
-                investment_ratio=1.0  # 긴급 상황이면 전량 매도
+                investment_ratio=1.0,  # 긴급 상황이면 전량 매도
+                max_loss_acceptable=0.02,
+                take_profit_target=0.02
             )
 
+        # ML 기반 거래 (AI 검증 비활성화 시)
         if not self.settings.use_ai_verification:
-            self._log_decision(db, market, ml_signal, False, False, False, "AI verification bypassed")
+            approved = ml_signal.action != "HOLD"
+            confidence = max(ml_signal.buy_probability, ml_signal.sell_probability)
+            
+            # ML 신뢰도 기반 투자 비율 (워뇨띠 스타일: 소액 분산)
+            if confidence >= 0.8:
+                investment_ratio = 0.15  # 높은 신뢰도: 15%
+            elif confidence >= 0.7:
+                investment_ratio = 0.10  # 중간 신뢰도: 10%
+            elif confidence >= 0.6:
+                investment_ratio = 0.07  # 보통 신뢰도: 7%
+            else:
+                investment_ratio = 0.05  # 낮은 신뢰도: 5%
+            
+            self._log_decision(db, market, ml_signal, False, False, False, f"ML only: {ml_signal.action} (confidence: {confidence:.1%})")
+            
             return TradeDecisionResult(
-                True, ml_signal.action, market, 
-                max(ml_signal.buy_probability, ml_signal.sell_probability), 
-                "Bypass", False
+                approved, ml_signal.action, market, confidence,
+                f"ML 기반 거래 (신뢰도: {confidence:.1%})", False,
+                investment_ratio=investment_ratio,
+                max_loss_acceptable=0.02,  # 워뇨띠 스타일: -2% 손절
+                take_profit_target=0.02  # 워뇨띠 스타일: +2% 익절
             )
 
         groq_ok, ollama_ok = await self.verifier.verify(summary)
-        # 둘 다 승인해야 거래 실행
-        approved = groq_ok and ollama_ok and ml_signal.action != "HOLD"
+        
+        # LLM 응답 실패(None)와 거부(False) 구분
+        # None = 응답 실패 (타임아웃/에러) -> ML 신호로 진행
+        # False = 명시적 거부 -> 거래 중단
+        
+        # 둘 다 명시적으로 거부한 경우만 거래 중단
+        if groq_ok is False and ollama_ok is False:
+            logger.warning(f"❌ {market}: 두 LLM 모두 거부 - 거래 중단")
+            self._log_decision(db, market, ml_signal, False, False, emergency, "Both LLMs rejected")
+            return TradeDecisionResult(False, "HOLD", market, 0.0, "Both LLMs rejected", False)
+        
+        # 하나라도 응답 실패(None)하면 ML 신호만으로 진행
+        llm_failed = (groq_ok is None) or (ollama_ok is None)
+        
+        if llm_failed:
+            logger.warning(f"⚠️ {market}: LLM 응답 실패 - ML 신호만으로 진행 (Groq={groq_ok}, Ollama={ollama_ok})")
+            # ML 신호만으로 거래 승인
+            approved = ml_signal.action != "HOLD"
+            groq_status = "⚠️" if groq_ok is None else ("✅" if groq_ok else "❌")
+            ollama_status = "⚠️" if ollama_ok is None else ("✅" if ollama_ok else "❌")
+            rationale_prefix = f"Groq {groq_status} Ollama {ollama_status} (LLM 실패, ML 신호 사용)"
+        else:
+            # 둘 다 응답 받음 - 둘 다 승인해야 거래 실행
+            approved = groq_ok and ollama_ok and ml_signal.action != "HOLD"
+            groq_status = "✅" if groq_ok else "❌"
+            ollama_status = "✅" if ollama_ok else "❌"
+            rationale_prefix = f"Groq {groq_status} Ollama {ollama_status}"
         
         # LLM을 사용하여 투자 비율 결정 (둘 다 승인했을 때만)
-        if approved and account_info:
+        if approved and not llm_failed and account_info:
             investment_decision = await self.verifier.decide_investment_ratio(
                 ml_signal={
                     "buy_probability": ml_signal.buy_probability,
@@ -79,7 +134,7 @@ class TradingEngine:
             investment_ratio = investment_decision["investment_ratio"]
             max_loss = investment_decision["max_loss_acceptable"]
             take_profit = investment_decision["take_profit_target"]
-            rationale = f"LLM approvals + {investment_decision['reasoning']}"
+            rationale = f"{rationale_prefix} + {investment_decision['reasoning']}"
         else:
             # ML 신뢰도 기반 자동 투자 비율 계산
             confidence = max(ml_signal.buy_probability, ml_signal.sell_probability)
@@ -94,13 +149,12 @@ class TradingEngine:
             
             max_loss = 0.03
             take_profit = 0.05
-            llm_status = "Groq ✅" if groq_ok else "Groq ❌"
-            llm_status += f" Ollama {'✅' if ollama_ok else '❌'}"
-            rationale = f"{llm_status} (신뢰도 기반 자동: {investment_ratio*100:.0f}%)" if approved else "LLM veto"
+            rationale = f"{rationale_prefix} (신뢰도 기반 자동: {investment_ratio*100:.0f}%)" if approved else f"{rationale_prefix} (veto)"
         
-        self._log_decision(db, market, ml_signal, groq_ok, ollama_ok, emergency, rationale)
+        # None을 False로 변환하여 로깅
+        self._log_decision(db, market, ml_signal, bool(groq_ok), bool(ollama_ok), emergency, rationale)
         return TradeDecisionResult(
-            approved, ml_signal.action, market, 
+            bool(approved), ml_signal.action, market, 
             max(ml_signal.buy_probability, ml_signal.sell_probability), 
             rationale, False,
             investment_ratio=investment_ratio,
@@ -158,6 +212,7 @@ class TradingEngine:
 class TradeExecutor:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
+        self.signal_filter = SignalFilter(self.settings)
 
     def execute(self, db: Session, decision: TradeDecisionResult, available_balance: float | None = None) -> None:
         if not decision.approved:
@@ -178,6 +233,8 @@ class TradeExecutor:
                 # 매수: KRW로 코인 구매
                 result = upbit.buy_market_order(decision.market, trade_amount)
                 logger.info(f"✅ BUY 주문 실행: {decision.market}, {trade_amount:,.0f}원 ({decision.investment_ratio*100:.0f}%)")
+                # 성공 시 신호 및 신뢰도 저장
+                self.signal_filter.set_last_signal(decision.market, "BUY", decision.confidence)
             elif decision.action == "SELL":
                 # 매도: 보유 코인 전량 매도
                 ticker = decision.market.split('-')[1]
@@ -190,6 +247,8 @@ class TradeExecutor:
                 if balance_amount > 0:
                     result = upbit.sell_market_order(decision.market, balance_amount)
                     logger.info(f"✅ SELL 주문 실행: {decision.market}, {balance_amount} {ticker} 전량 매도")
+                    # 성공 시 신호 및 신뢰도 저장
+                    self.signal_filter.set_last_signal(decision.market, "SELL", decision.confidence)
                 else:
                     logger.warning(f"⚠️ SELL 실패: {decision.market} 보유량 없음")
                     result = None

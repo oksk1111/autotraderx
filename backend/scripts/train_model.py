@@ -267,7 +267,7 @@ def evaluate_model(lstm_model, lgb_model, X_test, y_test, device):
             print(f"{name} accuracy: {accuracy:.2%}")
 
 
-def train_hybrid_model(market: str = "KRW-BTC", interval: str = "1h"):
+def train_hybrid_model(market: str = "KRW-BTC", interval: str = "minute60"):
     """
     하이브리드 모델 학습 메인 함수
     """
@@ -359,7 +359,7 @@ def main():
     메인 실행 함수
     """
     # BTC로 학습 (대표 마켓)
-    train_hybrid_model(market="KRW-BTC", interval="1h")
+    train_hybrid_model(market="KRW-BTC", interval="minute60")
 
 
 if __name__ == "__main__":
