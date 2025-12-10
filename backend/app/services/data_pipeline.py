@@ -56,7 +56,11 @@ class HistoricalDataService:
                 # minute60 (1시간봉) 데이터 200개 조회
                 candles = await loop.run_in_executor(None, pyupbit.get_ohlcv, market, "minute60", 200)
                 if candles is not None and len(candles) > 0:
-                    results[market] = candles.reset_index().to_dict("records")
+                    # reset_index()로 timestamp를 컬럼으로 변환하되, 'index' 컬럼 제거
+                    df = candles.reset_index()
+                    if 'index' in df.columns:
+                        df = df.drop(columns=['index'])
+                    results[market] = df.to_dict("records")
                     logger.debug(f"Fetched {len(candles)} candles for {market}")
                 else:
                     logger.warning(f"No data received for {market}")

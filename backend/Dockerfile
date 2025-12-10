@@ -12,5 +12,7 @@ COPY app ./app
 COPY scripts ./scripts
 COPY data ./data
 COPY models ./models
+COPY alembic.ini ./
+COPY alembic ./alembic
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

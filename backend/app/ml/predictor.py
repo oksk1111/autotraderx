@@ -168,7 +168,37 @@ class HybridPredictor:
         try:
             # 시퀀스 검증
             if sequence is None or not isinstance(sequence, np.ndarray):
-                logger.warning("Invalid sequence data, using default predictions")
+                logger.warning(
+                    f"Invalid sequence data for {market}: "
+                    f"type={type(sequence)}, is_ndarray={isinstance(sequence, np.ndarray) if sequence is not None else False}"
+                )
+                return MLSignal(
+                    market=market,
+                    buy_probability=0.33,
+                    sell_probability=0.33,
+                    emergency_score=0.0,
+                    confidence=0.0
+                )
+            
+            # 형상 및 NaN 검증
+            expected_shape = (24, 46)
+            if sequence.shape != expected_shape:
+                logger.warning(
+                    f"Invalid sequence shape for {market}: expected {expected_shape}, got {sequence.shape}"
+                )
+                return MLSignal(
+                    market=market,
+                    buy_probability=0.33,
+                    sell_probability=0.33,
+                    emergency_score=0.0,
+                    confidence=0.0
+                )
+            
+            nan_count = np.isnan(sequence).sum()
+            if nan_count > 0:
+                logger.warning(
+                    f"Sequence contains {nan_count} NaN values for {market}, using default predictions"
+                )
                 return MLSignal(
                     market=market,
                     buy_probability=0.33,

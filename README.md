@@ -39,6 +39,17 @@ Backend runs at `http://localhost:8000/api`, frontend dashboard at `http://local
 - Frontend dev server: `npm install && npm run dev` inside `frontend`.
 - Celery worker: `celery -A app.celery_app.celery_app worker --loglevel=info`
 
+### Utility Scripts
+
+- **Position Sync**: Sync Upbit account balance with local database.
+  ```bash
+  docker compose exec backend python /app/scripts/sync_positions.py
+  ```
+- **Health Check**: Run manual system health check.
+  ```bash
+  docker compose exec backend python /app/scripts/daily_health_check.py
+  ```
+
 ## Tests
 
 Run backend unit tests:

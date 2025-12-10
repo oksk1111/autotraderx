@@ -24,7 +24,11 @@ beat_schedule = {
     },
     'emergency-trading-check': {
         'task': 'app.celery_app.run_emergency_check',
-        'schedule': 10.0,  # 10초마다 긴급 체크
+        'schedule': 60.0,  # 60초(1분)마다 긴급 체크 (API 요청 제한 방지)
+    },
+    'system-health-check': {
+        'task': 'app.celery_app.run_health_check',
+        'schedule': 7200.0,  # 2시간(7200초)마다 시스템 헬스 체크
     },
     'auto-model-retrain': {
         'task': 'app.celery_app.run_auto_retrain',
@@ -109,4 +113,44 @@ def run_auto_retrain() -> str:
         return "timeout"
     except Exception as e:
         logger.error(f"❌ Model retraining error: {e}")
+        return "error"
+
+
+@celery_app.task
+def run_health_check() -> str:
+    """
+    시스템 헬스 체크 태스크
+    2시간마다 실행되어 시스템 상태를 점검하고 Groq LLM으로 분석합니다.
+    """
+    import subprocess
+    from pathlib import Path
+    
+    logger.info("🏥 Starting system health check...")
+    
+    try:
+        scripts_dir = Path(__file__).parent.parent / "scripts"
+        result = subprocess.run(
+            ["python", str(scripts_dir / "daily_health_check.py")],
+            capture_output=True,
+            text=True,
+            timeout=300  # 5분 타임아웃
+        )
+        
+        if result.returncode == 0:
+            logger.info("✅ System health check completed")
+            # 결과의 주요 부분만 로그에 출력
+            output_lines = result.stdout.split('\n')
+            for line in output_lines:
+                if '🏥' in line or '✅' in line or '⚠️' in line or '❌' in line:
+                    logger.info(line)
+            return "success"
+        else:
+            logger.error(f"❌ Health check failed: {result.stderr}")
+            return "failed"
+            
+    except subprocess.TimeoutExpired:
+        logger.error("❌ Health check timeout (5 minutes)")
+        return "timeout"
+    except Exception as e:
+        logger.error(f"❌ Health check error: {e}")
         return "error"

@@ -44,6 +44,21 @@ class Settings(BaseSettings):
 
     secret_key: str = "change_me"
     encryption_key: str = "change_me"
+    jwt_secret_key: str = "change_me"
+    
+    # Google OAuth
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:4173/auth/google/callback"
+    
+    # Naver OAuth
+    naver_client_id: str = ""
+    naver_client_secret: str = ""
+    naver_redirect_uri: str = "http://localhost:4173/auth/naver/callback"
+    
+    # Kakao OAuth
+    kakao_client_id: str = ""
+    kakao_redirect_uri: str = "http://localhost:4173/auth/kakao/callback"
 
     default_trade_amount: float = 50_000
     max_open_positions: int = 3

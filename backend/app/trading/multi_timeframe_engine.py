@@ -102,7 +102,7 @@ class MultiTimeframeEngine:
     
     def _load_timeframe_data(self, market: str, interval: str) -> pd.DataFrame:
         """
-        타임프레임 데이터 로드
+        타임프레임 데이터 로드 (API 직접 호출)
         
         Args:
             market: KRW-BTC
@@ -111,21 +111,18 @@ class MultiTimeframeEngine:
         Returns:
             DataFrame 또는 None
         """
-        # 마켓 코드의 하이픈을 언더스코어로 변환 (KRW-BTC -> KRW_BTC)
-        market_name = market.replace('-', '_')
-        file_path = self.data_dir / f"{market_name}_{interval}.csv"
-        
-        if not file_path.exists():
-            logger.warning(f"[MultiTF] 파일 없음: {file_path}")
-            return None
-        
+        import pyupbit
         try:
-            df = pd.read_csv(file_path)
-            if len(df) < 20:  # 최소 20개 필요
+            # API에서 직접 최신 데이터 조회 (파일 로드 대신)
+            df = pyupbit.get_ohlcv(market, interval=interval, count=50)
+            
+            if df is None or len(df) < 20:
+                logger.warning(f"[MultiTF] 데이터 부족 ({market}, {interval})")
                 return None
+                
             return df
         except Exception as e:
-            logger.error(f"[MultiTF] 데이터 로드 실패: {e}")
+            logger.error(f"[MultiTF] API 호출 실패 ({market}, {interval}): {e}")
             return None
     
     def _analyze_trend(self, df: pd.DataFrame, timeframe: str) -> Dict:
@@ -217,6 +214,10 @@ class MultiTimeframeEngine:
                 'confidence': float (0~1)
             }
         """
+        # 기술적 지표 계산 (없는 경우)
+        if 'rsi' not in df.columns:
+            df = self._add_technical_indicators(df)
+        
         latest = df.iloc[-1]
         
         # RSI
@@ -229,26 +230,29 @@ class MultiTimeframeEngine:
         # 볼린저 밴드
         bb_position = latest.get('bb_position', 0.5)
         
-        # 신호 카운트
+        # 신호 카운트 - 완화된 조건
         buy_score = 0
         sell_score = 0
         
-        if rsi < 35:
+        # RSI: 50 이하면 매수 가능 (기존: 35 이하)
+        if rsi < 50:
             buy_score += 1
         elif rsi > 65:
             sell_score += 1
         
+        # MACD: 골든크로스 신호
         if macd > macd_signal:
             buy_score += 1
         elif macd < macd_signal:
             sell_score += 1
         
-        if bb_position < 0.3:
+        # 볼린저밴드: 중간~하단이면 매수 가능 (기존: 0.3 이하)
+        if bb_position < 0.5:
             buy_score += 1
         elif bb_position > 0.7:
             sell_score += 1
         
-        # 최종 신호
+        # 최종 신호 - 2개 이상 조건 만족 시 신호 발생
         if buy_score >= 2:
             signal = "BUY"
             confidence = 0.6 + (buy_score - 2) * 0.15
@@ -259,6 +263,11 @@ class MultiTimeframeEngine:
             signal = "HOLD"
             confidence = 0.3
         
+        logger.info(
+            f"[Entry Analysis] RSI={rsi:.1f}, MACD={'↑' if macd>macd_signal else '↓'}, "
+            f"BB={bb_position:.2f} → buy_score={buy_score}, signal={signal}"
+        )
+        
         return {
             'signal': signal,
             'confidence': confidence,
@@ -267,6 +276,35 @@ class MultiTimeframeEngine:
             'rsi': rsi,
             'timeframe': timeframe,
         }
+    
+    def _add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """5분봉 데이터에 기술적 지표 추가"""
+        df = df.copy()
+        
+        # RSI (14주기)
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['rsi'] = 100 - (100 / (1 + rs))
+        
+        # MACD (12, 26, 9)
+        exp1 = df['close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['close'].ewm(span=26, adjust=False).mean()
+        df['macd'] = exp1 - exp2
+        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+        
+        # 볼린저 밴드 (20주기)
+        df['bb_middle'] = df['close'].rolling(window=20).mean()
+        bb_std = df['close'].rolling(window=20).std()
+        df['bb_upper'] = df['bb_middle'] + (bb_std * 2)
+        df['bb_lower'] = df['bb_middle'] - (bb_std * 2)
+        
+        # 볼린저 밴드 위치 (0=하단, 0.5=중간, 1=상단)
+        df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+        df['bb_position'] = df['bb_position'].clip(0, 1)
+        
+        return df
     
     def _combine_signals(
         self,

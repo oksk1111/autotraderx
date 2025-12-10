@@ -76,6 +76,11 @@ async def run_cycle() -> None:
                     import pandas as pd
                     df = pd.DataFrame(market_data)
                     
+                    # 'index' 컬럼 제거 (pyupbit reset_index()에서 추가된 불필요한 컬럼)
+                    if 'index' in df.columns:
+                        df = df.drop(columns=['index'])
+                        logger.debug(f"Removed 'index' column from {market} market data")
+                    
                     # Enhanced Engine으로 거래 신호 생성 (Hybrid + MultiTF)
                     action, confidence, details = enhanced_engine.get_enhanced_signal(market, df)
                     

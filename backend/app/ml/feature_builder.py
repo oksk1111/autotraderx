@@ -4,6 +4,9 @@
 import numpy as np
 import pandas as pd
 from typing import List, Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -140,6 +143,11 @@ def build_features_from_market_data(market_data: List[Dict[str, Any]], market: s
     # DataFrame 생성
     df = pd.DataFrame(market_data)
     
+    # 'index' 컬럼 제거 (pyupbit reset_index()에서 추가된 불필요한 컬럼)
+    if 'index' in df.columns:
+        df = df.drop(columns=['index'])
+        logger.debug("Removed 'index' column from market data")
+    
     # 필수 컬럼 확인
     required_columns = ['open', 'high', 'low', 'close', 'volume', 'value']
     if not all(col in df.columns for col in required_columns):
@@ -147,6 +155,15 @@ def build_features_from_market_data(market_data: List[Dict[str, Any]], market: s
     
     # 기술적 지표 계산
     df = calculate_technical_indicators(df)
+    
+    # NaN 검증
+    nan_count = df.isna().sum().sum()
+    if nan_count > 0:
+        logger.warning(f"NaN values detected in features for {market}: {nan_count} total")
+        # NaN이 30% 이상이면 데이터 품질 문제로 간주
+        total_cells = df.shape[0] * df.shape[1]
+        if nan_count / total_cells > 0.3:
+            raise ValueError(f"Too many NaN values in {market}: {nan_count}/{total_cells} ({nan_count/total_cells*100:.1f}%)")
     
     # 시퀀스 생성 (최근 24시간)
     sequence = prepare_sequence_for_prediction(df, sequence_length=24)

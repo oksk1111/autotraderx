@@ -9,7 +9,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.llm.verifier import DualLLMVerifier
 from app.ml.predictor import HybridPredictor
-from app.models import AutoTradingConfig, MLDecisionLog, TradeLog
+from app.models import AutoTradingConfig, MLDecisionLog, TradeLog, TradePosition
 from app.services.signal_filter import SignalFilter
 from app.trading.emergency import EmergencyGuard
 
@@ -232,9 +232,35 @@ class TradeExecutor:
             if decision.action == "BUY":
                 # 매수: KRW로 코인 구매
                 result = upbit.buy_market_order(decision.market, trade_amount)
-                logger.info(f"✅ BUY 주문 실행: {decision.market}, {trade_amount:,.0f}원 ({decision.investment_ratio*100:.0f}%)")
-                # 성공 시 신호 및 신뢰도 저장
-                self.signal_filter.set_last_signal(decision.market, "BUY", decision.confidence)
+                
+                # 주문 성공 여부 확인 (result가 dict이고 uuid가 있어야 함)
+                if result and isinstance(result, dict) and 'uuid' in result:
+                    logger.info(f"✅ BUY 주문 성공: {decision.market}, {trade_amount:,.0f}원")
+                    # 성공 시 신호 및 신뢰도 저장
+                    self.signal_filter.set_last_signal(decision.market, "BUY", decision.confidence)
+                    
+                    # TradePosition 생성
+                    try:
+                        current_price = pyupbit.get_current_price(decision.market)
+                        if current_price and isinstance(current_price, (int, float)):
+                            current_price = float(current_price)
+                            size = trade_amount / current_price
+                            position = TradePosition(
+                                market=decision.market,
+                                size=size,
+                                entry_price=current_price,
+                                stop_loss=current_price * (1 - decision.max_loss_acceptable),
+                                take_profit=current_price * (1 + decision.take_profit_target),
+                                status="OPEN"
+                            )
+                            db.add(position)
+                            db.commit()
+                            logger.info(f"📝 포지션 생성: {decision.market} @ {current_price:,.0f}원")
+                    except Exception as e:
+                        logger.error(f"포지션 생성 실패: {e}")
+                else:
+                    logger.warning(f"⚠️ BUY 주문 실패: {decision.market} - {result}")
+
             elif decision.action == "SELL":
                 # 매도: 보유 코인 전량 매도
                 ticker = decision.market.split('-')[1]
@@ -249,6 +275,19 @@ class TradeExecutor:
                     logger.info(f"✅ SELL 주문 실행: {decision.market}, {balance_amount} {ticker} 전량 매도")
                     # 성공 시 신호 및 신뢰도 저장
                     self.signal_filter.set_last_signal(decision.market, "SELL", decision.confidence)
+                    
+                    # TradePosition 종료
+                    try:
+                        positions = db.query(TradePosition).filter(
+                            TradePosition.market == decision.market,
+                            TradePosition.status == "OPEN"
+                        ).all()
+                        for pos in positions:
+                            pos.status = "CLOSED"
+                        db.commit()
+                        logger.info(f"📝 포지션 종료: {decision.market} ({len(positions)}건)")
+                    except Exception as e:
+                        logger.error(f"포지션 종료 실패: {e}")
                 else:
                     logger.warning(f"⚠️ SELL 실패: {decision.market} 보유량 없음")
                     result = None
