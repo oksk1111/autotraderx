@@ -68,3 +68,18 @@ class GroqClient:
         except Exception as exc:  # noqa: BLE001
             logger.error(f"⚠️ Groq: 에러 발생 (None 반환) - {exc}")
             return None  # 실패
+
+    async def chat(self, messages: list[dict]) -> str:
+        """
+        일반적인 채팅 요청을 처리합니다.
+        """
+        payload = {
+            "model": self.settings.groq_model,
+            "messages": messages,
+            "temperature": 0.7,
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(self.base_url, headers=self.headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]

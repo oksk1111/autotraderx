@@ -16,7 +16,9 @@ from app.db.session import SessionLocal
 from app.models.trading import AutoTradingConfig, TradePosition
 from app.llm.groq_client import GroqClient
 from app.core.config import get_settings
+from app.services.notifications import Notifier
 import json
+import pyupbit
 
 
 def get_system_health() -> dict:
@@ -31,7 +33,7 @@ def get_system_health() -> dict:
         total_positions = db.query(TradePosition).count()
         open_positions = db.query(TradePosition).filter(
             TradePosition.status == "OPEN"
-        ).count()
+        ).all()
         
         # 3. 최근 24시간 포지션 히스토리
         yesterday = datetime.utcnow() - timedelta(hours=24)
@@ -39,12 +41,27 @@ def get_system_health() -> dict:
             TradePosition.created_at >= yesterday
         ).all()
         
-        # 4. 시스템 상태 (간단하게)
+        # 4. 미실현 PnL 계산 (Open Position)
+        unrealized_pnl = 0.0
+        total_asset_value = 0.0
+        
+        try:
+            for pos in open_positions:
+                current_price = pyupbit.get_current_price(pos.market)
+                if current_price:
+                    current_val = pos.size * float(current_price)
+                    entry_val = pos.size * pos.entry_price
+                    unrealized_pnl += (current_val - entry_val)
+                    total_asset_value += current_val
+        except Exception as e:
+            print(f"⚠️ PnL 계산 중 오류: {e}")
+        
+        # 5. 시스템 상태 (간단하게)
         container_status = {
             "note": "Container status check skipped (requires Docker socket access)"
         }
         
-        # 5. 에러 카운트 (간략화)
+        # 6. 에러 카운트 (간략화)
         error_count = 0
         recent_errors = []
         
@@ -59,20 +76,13 @@ def get_system_health() -> dict:
             },
             "positions": {
                 "total": total_positions,
-                "open": open_positions,
-                "recent_24h": len(recent_positions),
-                "recent_trades": [
-                    {
-                        "market": p.market,
-                        "size": float(p.size),
-                        "entry_price": float(p.entry_price),
-                        "stop_loss": float(p.stop_loss),
-                        "take_profit": float(p.take_profit),
-                        "status": p.status,
-                        "created_at": p.created_at.isoformat()
-                    }
-                    for p in recent_positions[:10]
-                ]
+                "open": len(open_positions),
+                "recent_24h_count": len(recent_positions),
+            },
+            "performance": {
+                "unrealized_pnl": float(unrealized_pnl),
+                "total_asset_value": float(total_asset_value),
+                "open_position_count": len(open_positions)
             },
             "containers": container_status,
             "errors": {
@@ -96,22 +106,36 @@ async def analyze_with_groq(health_data: dict) -> str:
     try:
         client = GroqClient(settings)
         
-        prompt = f"""당신은 자동매매 시스템 모니터링 전문가입니다.
-아래 시스템 상태 데이터를 분석하고, 한국어로 간결한 일일 리포트를 작성해주세요.
+        messages = [
+            {
+                "role": "system",
+                "content": "당신은 암호화폐 자동매매 시스템의 수석 운영자입니다. 시스템 상태 데이터를 분석하여 명확하고 통찰력 있는 일일 리포트를 작성하세요."
+            },
+            {
+                "role": "user",
+                "content": f"""
+다음 시스템 상태 데이터를 분석하고, 한국어로 일일 리포트를 작성해주세요.
 
 시스템 상태:
 {json.dumps(health_data, indent=2, ensure_ascii=False)}
 
 다음 항목을 포함해주세요:
-1. 시스템 상태 요약 (정상/주의/경고)
-2. 거래 활동 분석 (24시간 기준)
-3. 발견된 문제점 (있다면)
-4. 권장 조치사항 (필요시)
+1. 🚦 시스템 상태 요약 (정상/주의/경고) - 한 줄 요약
+2. 💰 거래 성과 분석 (PnL, 거래량, 승률 등)
+3. ⚙️ 시스템 운영 현황 (설정, 포지션 상태)
+4. 🛡️ 리스크 및 제언 (발견된 문제점이나 개선 제안)
 
-이모지를 사용해서 가독성 좋게 작성해주세요."""
+이모지를 적절히 사용하여 가독성을 높여주세요.
+"""
+            }
+        ]
 
-        response_data = await client.verify(prompt)
-        content = response_data["choices"][0]["message"]["content"]
+        if hasattr(client, 'chat'):
+            content = await client.chat(messages)
+        else:
+            # Fallback if chat method is not available (should not happen if edit succeeded)
+            response_data = await client.verify(messages[1]["content"])
+            content = response_data["choices"][0]["message"]["content"]
         
         return content
         
@@ -119,8 +143,8 @@ async def analyze_with_groq(health_data: dict) -> str:
         return f"⚠️ LLM 분석 실패: {str(e)}\n\n원본 데이터:\n{json.dumps(health_data, indent=2, ensure_ascii=False)}"
 
 
-def send_notification(report: str):
-    """알림 전송 (Slack, Email 등)"""
+async def send_notification(report: str):
+    """알림 전송 (Slack, Telegram)"""
     
     # 콘솔 출력
     print("=" * 80)
@@ -129,17 +153,9 @@ def send_notification(report: str):
     print(report)
     print("=" * 80)
     
-    # TODO: Slack webhook 또는 이메일 전송 추가
-    slack_webhook = os.getenv("SLACK_WEBHOOK_URL")
-    if slack_webhook:
-        import requests
-        try:
-            requests.post(slack_webhook, json={
-                "text": f"🏥 AutoTraderX 일일 리포트\n\n{report}"
-            })
-            print("✅ Slack 알림 전송 완료")
-        except Exception as e:
-            print(f"⚠️ Slack 알림 전송 실패: {e}")
+    notifier = Notifier()
+    await notifier.send("🏥 AutoTraderX 일일 리포트", report)
+    print("✅ 알림 전송 요청 완료")
 
 
 async def main():
@@ -156,7 +172,7 @@ async def main():
     
     # 3. 알림 전송
     print("📤 알림 전송 중...")
-    send_notification(report)
+    await send_notification(report)
     
     print("✅ 일일 헬스 체크 완료")
     
@@ -165,4 +181,5 @@ async def main():
 
 if __name__ == "__main__":
     sys.exit(asyncio.run(main()))
+
 

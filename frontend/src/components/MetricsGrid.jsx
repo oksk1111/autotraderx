@@ -1,25 +1,37 @@
-function MetricsGrid({ metrics, loading }) {
+function MetricsGrid({ metrics, snapshot, loading }) {
+  if (loading) return <div className="loading mb-4">Loading metrics...</div>;
+
   const items = [
-    { label: "Trades", value: metrics?.trade_count ?? "-" },
-    { label: "Last Trade (₩)", value: metrics?.last_trade_amount ?? "-" },
-    { label: "Confidence", value: metrics?.last_confidence ?? "-" }
+    { 
+      label: "24h P&L", 
+      value: snapshot?.pnl_24h ? `${snapshot.pnl_24h}%` : "0.00%",
+      isPositive: (snapshot?.pnl_24h || 0) >= 0
+    },
+    { 
+      label: "Active Markets", 
+      value: snapshot?.active_markets?.length ?? 0 
+    },
+    { 
+      label: "Total Trades", 
+      value: metrics?.trade_count ?? 0 
+    },
+    { 
+      label: "Last Confidence", 
+      value: metrics?.last_confidence ? `${(metrics.last_confidence * 100).toFixed(1)}%` : "-" 
+    }
   ];
+
   return (
-    <section className="panel">
-      <h2>Execution Metrics</h2>
-      {loading ? (
-        <p>Loading...</p>
-      ) : (
-        <div className="metrics">
-          {items.map((item) => (
-            <div key={item.label}>
-              <p className="metric-label">{item.label}</p>
-              <p className="metric-value">{item.value}</p>
-            </div>
-          ))}
+    <div className="grid-4">
+      {items.map((item) => (
+        <div key={item.label} className="stat-card">
+          <div className="stat-label">{item.label}</div>
+          <div className={`stat-value ${item.isPositive === true ? 'text-success' : item.isPositive === false ? 'text-danger' : ''}`}>
+            {item.value}
+          </div>
         </div>
-      )}
-    </section>
+      ))}
+    </div>
   );
 }
 

@@ -11,10 +11,79 @@ from app.services.data_pipeline import HistoricalDataService
 from app.services.trading.emergency_trader import EmergencyTrader
 from app.trading.engine import TradeExecutor, TradingEngine
 from app.trading.enhanced_engine import get_enhanced_engine
-from app.models.trading import AutoTradingConfig
+from app.models.trading import AutoTradingConfig, TradePosition
 
 logger = get_logger(__name__)
 settings = get_settings()
+
+
+def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
+    """
+    오픈 포지션의 Stop Loss / Take Profit 체크 및 실행
+    """
+    from app.trading.engine import TradeDecisionResult
+    
+    # OPEN 상태인 포지션 조회
+    positions = db.query(TradePosition).filter(TradePosition.status == "OPEN").all()
+    if not positions:
+        return
+
+    logger.info(f"Checking {len(positions)} open positions for Stop Loss/Take Profit")
+    
+    # 마켓 목록 추출
+    markets = list(set([p.market for p in positions]))
+    
+    try:
+        # 현재가 일괄 조회
+        current_prices = pyupbit.get_current_price(markets)
+        # 단일 마켓일 경우 float 반환, 다수일 경우 dict 반환
+        if isinstance(current_prices, (float, int)):
+            current_prices = {markets[0]: current_prices}
+        elif current_prices is None:
+            logger.error("Failed to fetch current prices for position check")
+            return
+            
+        for pos in positions:
+            market = pos.market
+            current_price = current_prices.get(market)
+            
+            if not current_price:
+                continue
+            
+            current_price = float(current_price)
+            
+            # Stop Loss 체크
+            if current_price <= pos.stop_loss:
+                logger.warning(f"🛑 Stop Loss Triggered for {pos.market}: Current {current_price:,.0f} <= Stop {pos.stop_loss:,.0f}")
+                
+                decision = TradeDecisionResult(
+                    approved=True,
+                    action="SELL",
+                    market=pos.market,
+                    confidence=1.0,
+                    rationale=f"Stop Loss Triggered (Entry: {pos.entry_price:,.0f}, Current: {current_price:,.0f})",
+                    emergency=True,
+                    investment_ratio=1.0
+                )
+                executor.execute(db, decision)
+                
+            # Take Profit 체크
+            elif current_price >= pos.take_profit:
+                logger.info(f"💰 Take Profit Triggered for {pos.market}: Current {current_price:,.0f} >= Target {pos.take_profit:,.0f}")
+                
+                decision = TradeDecisionResult(
+                    approved=True,
+                    action="SELL",
+                    market=pos.market,
+                    confidence=1.0,
+                    rationale=f"Take Profit Triggered (Entry: {pos.entry_price:,.0f}, Current: {current_price:,.0f})",
+                    emergency=False,
+                    investment_ratio=1.0
+                )
+                executor.execute(db, decision)
+                
+    except Exception as e:
+        logger.error(f"Error managing positions: {e}", exc_info=True)
 
 
 async def run_cycle() -> None:
@@ -61,6 +130,9 @@ async def run_cycle() -> None:
 
     db: Session = SessionLocal()
     try:
+        # 1. 기존 포지션 관리 (Stop Loss / Take Profit)
+        check_and_manage_positions(db, executor)
+        
         for market in markets:
             try:
                 # 시장 데이터를 ML 입력 특징으로 변환

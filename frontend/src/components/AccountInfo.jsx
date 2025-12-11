@@ -33,70 +33,68 @@ function AccountInfo() {
 
   return (
     <div className="panel">
-      <h2>💰 계정 정보</h2>
+      <div className="flex-between mb-4">
+        <h2>Account Balance</h2>
+        <span className="text-muted" style={{ fontSize: '0.85rem' }}>Updated just now</span>
+      </div>
       
-      <div style={{ marginBottom: '20px', padding: '15px', background: '#1a1a1a', borderRadius: '8px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-          <div>
-            <div style={{ color: '#888', fontSize: '0.9rem' }}>가용 KRW</div>
-            <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#4CAF50' }}>
-              ₩{formatNumber(data?.krw_balance || 0)}
-            </div>
+      <div className="grid-2" style={{ gap: '1rem', marginBottom: '1.5rem' }}>
+        <div className="stat-card">
+          <div className="stat-label">Available KRW</div>
+          <div className="stat-value text-success">
+            ₩{formatNumber(data?.krw_balance || 0)}
           </div>
-          <div>
-            <div style={{ color: '#888', fontSize: '0.9rem' }}>총 자산</div>
-            <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>
-              ₩{formatNumber(data?.total_asset_value || 0)}
-            </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Total Assets</div>
+          <div className="stat-value">
+            ₩{formatNumber(data?.total_asset_value || 0)}
           </div>
         </div>
       </div>
 
       {data?.holdings && data.holdings.length > 0 ? (
         <div>
-          <h3 style={{ marginBottom: '10px', color: '#888' }}>보유 코인 ({data.total_positions}개)</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <h3 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', textTransform: 'uppercase' }}>
+            Holdings ({data.total_positions})
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {data.holdings.map((holding) => (
               <div 
                 key={holding.market} 
+                className="stat-card"
                 style={{ 
-                  padding: '12px', 
-                  background: '#1a1a1a', 
-                  borderRadius: '6px',
-                  borderLeft: `3px solid ${holding.profit_loss >= 0 ? '#4CAF50' : '#f44336'}`
+                  padding: '1rem',
+                  borderLeft: `3px solid ${holding.profit_loss >= 0 ? 'var(--success)' : 'var(--danger)'}`
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
                   <div>
-                    <span style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{holding.currency}</span>
-                    <span style={{ color: '#888', marginLeft: '8px', fontSize: '0.9rem' }}>
-                      {holding.amount.toFixed(4)}개
+                    <span style={{ fontWeight: '700', fontSize: '1rem' }}>{holding.currency}</span>
+                    <span className="text-muted" style={{ marginLeft: '0.5rem', fontSize: '0.85rem' }}>
+                      {holding.amount.toFixed(4)}
                     </span>
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ 
-                      fontWeight: 'bold',
-                      color: holding.profit_loss >= 0 ? '#4CAF50' : '#f44336'
+                      fontWeight: '700',
+                      color: holding.profit_loss >= 0 ? 'var(--success)' : 'var(--danger)'
                     }}>
                       {formatPercent(holding.profit_loss_rate)}
                     </div>
-                    <div style={{ fontSize: '0.9rem', color: '#888' }}>
-                      {holding.profit_loss >= 0 ? '+' : ''}₩{formatNumber(holding.profit_loss)}
-                    </div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#888' }}>
-                  <div>평단: ₩{formatNumber(holding.avg_buy_price)}</div>
-                  <div>현재: ₩{formatNumber(holding.current_price)}</div>
-                  <div>평가: ₩{formatNumber(holding.current_value)}</div>
+                <div className="flex-between text-muted" style={{ fontSize: '0.8rem' }}>
+                  <div>Avg: ₩{formatNumber(holding.avg_buy_price)}</div>
+                  <div>Cur: ₩{formatNumber(holding.current_price)}</div>
                 </div>
               </div>
             ))}
           </div>
         </div>
       ) : (
-        <p style={{ color: '#888', textAlign: 'center', padding: '20px' }}>
-          보유 중인 코인이 없습니다
+        <p className="text-muted" style={{ textAlign: 'center', padding: '1rem' }}>
+          No active positions
         </p>
       )}
     </div>

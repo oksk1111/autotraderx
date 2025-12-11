@@ -1,9 +1,7 @@
 import { useQuery } from "react-query";
 import axios from "axios";
 import MetricsGrid from "./MetricsGrid";
-import DecisionTimeline from "./DecisionTimeline";
 import TradeTable from "./TradeTable";
-import SnapshotCard from "./SnapshotCard";
 import AccountInfo from "./AccountInfo";
 import TradingConfigPanel from "./TradingConfigPanel";
 
@@ -20,11 +18,6 @@ function DashboardPage() {
     return data;
   });
 
-  const decisionsQuery = useQuery(["decisions"], async () => {
-    const { data } = await api.get("/dashboard/decisions");
-    return data;
-  });
-
   const snapshotQuery = useQuery(["snapshot"], async () => {
     const { data } = await api.get("/dashboard/snapshot");
     return data;
@@ -34,18 +27,28 @@ function DashboardPage() {
     <div className="page">
       <header>
         <div>
-          <h1>AutoTrader-LXA v3</h1>
-          <p>Hybrid ML + dual LLM autonomous crypto trader</p>
+          <h1>AutoTrader X</h1>
+          <p>Autonomous Crypto Trading System</p>
         </div>
-        <span className="badge">LIVE</span>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          <span className="badge">LIVE</span>
+        </div>
       </header>
-      <TradingConfigPanel />
-      <MetricsGrid metrics={metricsQuery.data} loading={metricsQuery.isLoading} />
-      <section className="panel-grid">
+
+      {/* Top Row: Account & Config */}
+      <div className="grid-2">
         <AccountInfo />
-        <SnapshotCard data={snapshotQuery.data} loading={snapshotQuery.isLoading} />
-      </section>
-      <DecisionTimeline data={decisionsQuery.data} loading={decisionsQuery.isLoading} />
+        <TradingConfigPanel />
+      </div>
+
+      {/* Middle Row: Key Metrics */}
+      <MetricsGrid 
+        metrics={metricsQuery.data} 
+        snapshot={snapshotQuery.data}
+        loading={metricsQuery.isLoading || snapshotQuery.isLoading} 
+      />
+
+      {/* Bottom Row: Recent Trades */}
       <TradeTable trades={tradesQuery.data} loading={tradesQuery.isLoading} />
     </div>
   );

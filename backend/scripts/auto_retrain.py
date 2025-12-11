@@ -55,6 +55,31 @@ def run_command(command: list, description: str) -> bool:
         return False
 
 
+def archive_model():
+    """
+    현재 모델을 아카이브 폴더로 백업합니다.
+    """
+    model_dir = PROJECT_ROOT / "backend" / "models"
+    archive_dir = model_dir / "archive"
+    archive_dir.mkdir(exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # 주요 모델 파일 백업
+    model_files = ["lstm_best.pth", "lightgbm_model.txt", "model_metadata.json"]
+    
+    for filename in model_files:
+        src = model_dir / filename
+        if src.exists():
+            dst = archive_dir / f"{filename.split('.')[0]}_{timestamp}.{filename.split('.')[1]}"
+            try:
+                import shutil
+                shutil.copy2(src, dst)
+                logger.info(f"📦 모델 백업 완료: {dst.name}")
+            except Exception as e:
+                logger.error(f"모델 백업 실패 ({filename}): {e}")
+
+
 def main():
     """
     자동 재훈련 메인 함수
@@ -87,6 +112,9 @@ def main():
         return False
     
     # 3단계: 모델 훈련
+    # 훈련 전 기존 모델 백업
+    archive_model()
+    
     if not run_command(
         [sys.executable, str(SCRIPTS_DIR / "train_model.py")],
         "3단계: LSTM + LightGBM 하이브리드 모델 훈련"
