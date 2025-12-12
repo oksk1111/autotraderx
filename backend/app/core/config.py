@@ -80,6 +80,15 @@ class Settings(BaseSettings):
     slack_webhook_url: str | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    
+    # Email Notification
+    email_host: str | None = "smtp.gmail.com"
+    email_port: int = 587
+    email_user: str | None = None
+    email_password: str | None = None
+    
+    # Alert Level (INFO, WARNING, ERROR)
+    alert_level: str = "WARNING"
 
     @property
     def resolved_database_url(self) -> str:

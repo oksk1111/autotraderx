@@ -143,8 +143,8 @@ async def analyze_with_groq(health_data: dict) -> str:
         return f"⚠️ LLM 분석 실패: {str(e)}\n\n원본 데이터:\n{json.dumps(health_data, indent=2, ensure_ascii=False)}"
 
 
-async def send_notification(report: str):
-    """알림 전송 (Slack, Telegram)"""
+async def send_notification(report: str, has_issues: bool = False):
+    """알림 전송 (Slack, Telegram, Email)"""
     
     # 콘솔 출력
     print("=" * 80)
@@ -154,8 +154,12 @@ async def send_notification(report: str):
     print("=" * 80)
     
     notifier = Notifier()
-    await notifier.send("🏥 AutoTraderX 일일 리포트", report)
-    print("✅ 알림 전송 요청 완료")
+    
+    # 이슈가 있으면 WARNING 레벨로 격상하여 알림 전송 보장
+    level = "WARNING" if has_issues else "INFO"
+    
+    await notifier.send("🏥 AutoTraderX 일일 리포트", report, level=level)
+    print(f"✅ 알림 전송 요청 완료 (Level: {level})")
 
 
 async def main():
@@ -172,7 +176,15 @@ async def main():
     
     # 3. 알림 전송
     print("📤 알림 전송 중...")
-    await send_notification(report)
+    
+    # 이슈 감지 로직 (PnL 음수, 에러 발생 등)
+    has_issues = False
+    if health_data.get('performance', {}).get('unrealized_pnl', 0) < 0:
+        has_issues = True
+    if health_data.get('errors', {}).get('count', 0) > 0:
+        has_issues = True
+        
+    await send_notification(report, has_issues=has_issues)
     
     print("✅ 일일 헬스 체크 완료")
     
