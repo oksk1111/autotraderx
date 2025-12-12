@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.db.session import SessionLocal
 from app.models.trading import AutoTradingConfig, TradePosition
+from app.models.user import User
 from app.llm.groq_client import GroqClient
 from app.core.config import get_settings
 from app.services.notifications import Notifier
@@ -158,7 +159,19 @@ async def send_notification(report: str, has_issues: bool = False):
     # 이슈가 있으면 WARNING 레벨로 격상하여 알림 전송 보장
     level = "WARNING" if has_issues else "INFO"
     
-    await notifier.send("🏥 AutoTraderX 일일 리포트", report, level=level)
+    # 이메일 수신자 조회 (DB에서 활성 사용자 조회)
+    email_recipients = []
+    db = SessionLocal()
+    try:
+        users = db.query(User).filter(User.is_active == True, User.email.isnot(None)).all()
+        email_recipients = [user.email for user in users]
+        print(f"📧 이메일 수신 대상: {len(email_recipients)}명")
+    except Exception as e:
+        print(f"⚠️ 사용자 이메일 조회 실패: {e}")
+    finally:
+        db.close()
+    
+    await notifier.send("🏥 AutoTraderX 일일 리포트", report, level=level, email_recipients=email_recipients)
     print(f"✅ 알림 전송 요청 완료 (Level: {level})")
 
 

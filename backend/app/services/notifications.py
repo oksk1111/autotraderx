@@ -5,6 +5,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from enum import Enum
+from typing import List, Optional
 
 import httpx
 from slack_sdk.webhook import WebhookClient
@@ -41,7 +42,7 @@ class Notifier:
         except ValueError:
             return True
 
-    async def send(self, title: str, message: str, level: str = "INFO") -> None:
+    async def send(self, title: str, message: str, level: str = "INFO", email_recipients: List[str] | None = None) -> None:
         """
         알림 전송 메인 함수
         
@@ -49,6 +50,7 @@ class Notifier:
             title: 알림 제목
             message: 알림 내용
             level: 알림 중요도 (INFO, WARNING, ERROR)
+            email_recipients: 이메일 수신자 목록 (None일 경우 이메일 전송 안함)
         """
         try:
             msg_level = AlertLevel(level.upper())
@@ -72,7 +74,9 @@ class Notifier:
         # 각 채널로 전송
         await self._slack(formatted_title, message)
         await self._telegram(f"{formatted_title}\n\n{message}")
-        await self._email(formatted_title, message)
+        
+        if email_recipients:
+            await self._email(formatted_title, message, email_recipients)
 
     async def _slack(self, title: str, message: str) -> None:
         if not self.settings.slack_webhook_url:
@@ -96,23 +100,25 @@ class Notifier:
         except Exception as e:
             logger.error(f"Telegram 전송 실패: {e}")
 
-    async def _email(self, title: str, message: str) -> None:
+    async def _email(self, title: str, message: str, recipients: List[str]) -> None:
         if not self.settings.email_user or not self.settings.email_password:
             return
 
         try:
-            msg = MIMEMultipart()
-            msg['From'] = self.settings.email_user
-            msg['To'] = self.settings.email_user  # 본인에게 전송
-            msg['Subject'] = f"[AutoTraderX] {title}"
-
-            msg.attach(MIMEText(message, 'plain'))
-
             # 동기 함수지만 짧은 작업이라 여기서 처리 (필요시 비동기 래퍼 사용)
             with smtplib.SMTP(self.settings.email_host, self.settings.email_port) as server:
                 server.starttls()
                 server.login(self.settings.email_user, self.settings.email_password)
-                server.send_message(msg)
+                
+                for recipient in recipients:
+                    msg = MIMEMultipart()
+                    msg['From'] = self.settings.email_user
+                    msg['To'] = recipient
+                    msg['Subject'] = f"[AutoTraderX] {title}"
+                    msg.attach(MIMEText(message, 'plain'))
+                    
+                    server.send_message(msg)
+                    logger.info(f"Email sent to {recipient}")
                 
         except Exception as e:
             logger.error(f"Email 전송 실패: {e}")
