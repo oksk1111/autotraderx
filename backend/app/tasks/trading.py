@@ -157,15 +157,15 @@ async def run_cycle() -> None:
                     action, confidence, details = enhanced_engine.get_enhanced_signal(market, df)
                     
                     if action != "HOLD":
-                        # 신뢰도 기반 투자 비율 설정
+                        # 신뢰도 기반 투자 비율 설정 (리스크 관리 강화: 최대 20%로 제한)
                         if confidence >= 0.85:
-                            investment_ratio = 0.5
+                            investment_ratio = 0.20  # 기존 0.5 -> 0.2
                         elif confidence >= 0.75:
-                            investment_ratio = 0.3
+                            investment_ratio = 0.15  # 기존 0.3 -> 0.15
                         elif confidence >= 0.65:
-                            investment_ratio = 0.2
+                            investment_ratio = 0.10  # 기존 0.2 -> 0.1
                         else:
-                            investment_ratio = 0.1
+                            investment_ratio = 0.05  # 기존 0.1 -> 0.05
                         
                         # SELL은 전량 매도
                         if action == "SELL":

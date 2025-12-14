@@ -21,10 +21,10 @@ class EnhancedTradingEngine:
     4. 신호 조합하여 최종 거래 결정
     """
     
-    def __init__(self, use_rl: bool = False):
+    def __init__(self, use_rl: bool = True):
         """
         Args:
-            use_rl: RL Agent 사용 여부 (기본값: False)
+            use_rl: RL Agent 사용 여부 (기본값: True)
         """
         self.use_rl = use_rl
         
