@@ -40,3 +40,4 @@ docker==7.1.0
 stable-baselines3==2.3.2
 gym==0.26.2
 tensorboard==2.16.2
+shimmy<2.0.0

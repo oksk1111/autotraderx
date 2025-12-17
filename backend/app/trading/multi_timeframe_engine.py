@@ -5,7 +5,7 @@
 워뇨띠 스타일: 큰 흐름 속에서 진입 타이밍 포착
 """
 import logging
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -41,21 +41,27 @@ class MultiTimeframeEngine:
             'momentum_strong': 0.01,  # 1% 이상 변동
         }
     
-    def analyze(self, market: str) -> Tuple[str, float, Dict]:
+    def analyze(self, market: str, data_dict: Optional[Dict[str, pd.DataFrame]] = None) -> Tuple[str, float, Dict]:
         """
         멀티 타임프레임 분석
         
         Args:
             market: 마켓 코드 (예: KRW-BTC)
+            data_dict: { 'minute60': df, 'minute15': df, 'minute5': df } (Optional)
         
         Returns:
             (action, confidence, details)
         """
         try:
             # 1. 각 타임프레임 데이터 로드
-            df_1h = self._load_timeframe_data(market, "minute60")
-            df_15m = self._load_timeframe_data(market, "minute15")
-            df_5m = self._load_timeframe_data(market, "minute5")
+            if data_dict:
+                df_1h = data_dict.get("minute60")
+                df_15m = data_dict.get("minute15")
+                df_5m = data_dict.get("minute5")
+            else:
+                df_1h = self._load_timeframe_data(market, "minute60")
+                df_15m = self._load_timeframe_data(market, "minute15")
+                df_5m = self._load_timeframe_data(market, "minute5")
             
             if df_1h is None or df_15m is None or df_5m is None:
                 logger.warning(f"[MultiTF] {market} 데이터 부족")

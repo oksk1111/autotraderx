@@ -69,3 +69,33 @@ class HistoricalDataService:
                 logger.error(f"Error fetching data for {market}: {e}")
                 results[market] = []
         return results
+
+    async def fetch_multi_timeframe(self) -> Dict[str, Dict[str, list[dict]]]:
+        """
+        멀티 타임프레임 데이터 조회 (1h, 15m, 5m)
+        Returns: {market: {'minute60': [...], 'minute15': [...], 'minute5': [...]}}
+        """
+        loop = asyncio.get_event_loop()
+        results: Dict[str, Dict[str, list[dict]]] = {}
+        intervals = ["minute60", "minute15", "minute5"]
+        
+        for market in self.markets:
+            results[market] = {}
+            for interval in intervals:
+                try:
+                    # API 호출 간격 조절 (Rate Limit 방지)
+                    await asyncio.sleep(0.2)
+                    
+                    candles = await loop.run_in_executor(None, pyupbit.get_ohlcv, market, interval, 200)
+                    if candles is not None and len(candles) > 0:
+                        df = candles.reset_index()
+                        if 'index' in df.columns:
+                            df = df.drop(columns=['index'])
+                        results[market][interval] = df.to_dict("records")
+                    else:
+                        logger.warning(f"No data received for {market} {interval}")
+                        results[market][interval] = []
+                except Exception as e:
+                    logger.error(f"Error fetching data for {market} {interval}: {e}")
+                    results[market][interval] = []
+        return results

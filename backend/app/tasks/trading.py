@@ -91,8 +91,8 @@ async def run_cycle() -> None:
     markets = settings.tracked_markets
     data_service = HistoricalDataService(markets)
     
-    # 시장별 최근 데이터 가져오기 (최소 150개, 권장 200개)
-    market_data_dict = await data_service.fetch_recent()
+    # 시장별 멀티 타임프레임 데이터 가져오기 (1h, 15m, 5m)
+    multi_tf_data_dict = await data_service.fetch_multi_timeframe()
 
     # Upbit 계정 정보 가져오기
     try:
@@ -136,7 +136,8 @@ async def run_cycle() -> None:
         for market in markets:
             try:
                 # 시장 데이터를 ML 입력 특징으로 변환
-                market_data = market_data_dict.get(market, [])
+                market_tf_data = multi_tf_data_dict.get(market, {})
+                market_data = market_tf_data.get('minute60', [])
                 
                 if len(market_data) < 150:
                     logger.warning(f"Insufficient data for {market}: {len(market_data)} rows (need 150+)")
@@ -153,8 +154,17 @@ async def run_cycle() -> None:
                         df = df.drop(columns=['index'])
                         logger.debug(f"Removed 'index' column from {market} market data")
                     
+                    # Multi-timeframe 데이터 준비
+                    multi_tf_dfs = {}
+                    for interval, data in market_tf_data.items():
+                        if data:
+                            tf_df = pd.DataFrame(data)
+                            if 'index' in tf_df.columns:
+                                tf_df = tf_df.drop(columns=['index'])
+                            multi_tf_dfs[interval] = tf_df
+
                     # Enhanced Engine으로 거래 신호 생성 (Hybrid + MultiTF)
-                    action, confidence, details = enhanced_engine.get_enhanced_signal(market, df)
+                    action, confidence, details = enhanced_engine.get_enhanced_signal(market, df, multi_tf_data=multi_tf_dfs)
                     
                     if action != "HOLD":
                         # 신뢰도 기반 투자 비율 설정 (리스크 관리 강화: 최대 20%로 제한)
@@ -171,6 +181,16 @@ async def run_cycle() -> None:
                         if action == "SELL":
                             investment_ratio = 1.0
                         
+                        # 동적 SL/TP 설정 (변동성 대응)
+                        # 기본값: SL -2.5%, TP +4.0%
+                        stop_loss_pct = 0.025
+                        take_profit_pct = 0.040
+                        
+                        # 신뢰도가 높으면 SL을 타이트하게 잡고 TP를 늘림 (확신이 있으므로)
+                        if confidence >= 0.8:
+                            stop_loss_pct = 0.020  # -2.0%
+                            take_profit_pct = 0.060  # +6.0%
+                        
                         # TradeDecisionResult 생성
                         from app.trading.engine import TradeDecisionResult
                         decision = TradeDecisionResult(
@@ -181,8 +201,8 @@ async def run_cycle() -> None:
                             rationale=f"Enhanced Engine: {details.get('rationale', 'Multi-layer signal')}",
                             emergency=False,
                             investment_ratio=investment_ratio,
-                            max_loss_acceptable=0.03,
-                            take_profit_target=0.05,
+                            max_loss_acceptable=stop_loss_pct,
+                            take_profit_target=take_profit_pct,
                         )
                         
                         logger.info(f"🚀 Enhanced: {market} {action} ({confidence:.1%}) - {details.get('rationale', '')[:80]}")

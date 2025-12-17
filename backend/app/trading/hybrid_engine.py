@@ -27,9 +27,9 @@ class HybridTradingEngine:
         
         # 기술적 지표 임계값
         self.thresholds = {
-            'rsi_oversold': 30,      # RSI 과매도
-            'rsi_overbought': 70,    # RSI 과매수
-            'volume_surge': 2.0,     # 거래량 급등 (평균 대비)
+            'rsi_oversold': 35,      # RSI 과매도 (기존 30 -> 35 완화)
+            'rsi_overbought': 65,    # RSI 과매수 (기존 70 -> 65 완화)
+            'volume_surge': 1.5,     # 거래량 급등 (기존 2.0 -> 1.5 완화)
             'bb_lower': 0.2,         # 볼린저 하단 (0~1)
             'bb_upper': 0.8,         # 볼린저 상단
             'macd_threshold': 0.0,   # MACD 골든크로스
@@ -232,6 +232,19 @@ class HybridTradingEngine:
         else:
             buy_signals['bollinger'] = 0
             sell_signals['bollinger'] = 0
+            
+        # 5. Trend Filter (EMA 50)
+        # 추세 추종: 상승 추세에서는 매수 신호 강화, 하락 추세에서는 매도 신호 강화
+        close = row.get('close', 0)
+        ema_50 = row.get('ema_50', 0)
+        
+        if ema_50 > 0:
+            if close > ema_50:
+                buy_signals['trend'] = 1   # 상승 추세 → 매수 유리
+                sell_signals['trend'] = 0
+            else:
+                buy_signals['trend'] = 0
+                sell_signals['trend'] = 1  # 하락 추세 → 매도 유리
         
         return buy_signals, sell_signals
     

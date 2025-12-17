@@ -72,13 +72,14 @@ class EnhancedTradingEngine:
                 self.rl_agent = None
                 self.has_rl = False
     
-    def get_enhanced_signal(self, market: str, df: pd.DataFrame) -> Tuple[str, float, Dict]:
+    def get_enhanced_signal(self, market: str, df: pd.DataFrame, multi_tf_data: Optional[Dict[str, pd.DataFrame]] = None) -> Tuple[str, float, Dict]:
         """
         향상된 거래 신호 생성 (3-Layer 통합)
         
         Args:
             market: 마켓 코드 (KRW-BTC)
             df: OHLCV + 기술적 지표 데이터프레임
+            multi_tf_data: 멀티 타임프레임 데이터 (Optional)
         
         Returns:
             (action, confidence, details)
@@ -114,7 +115,7 @@ class EnhancedTradingEngine:
         
         if self.has_multi_tf:
             try:
-                multi_tf_action, multi_tf_conf, multi_tf_details = self.multi_tf_engine.analyze(market)
+                multi_tf_action, multi_tf_conf, multi_tf_details = self.multi_tf_engine.analyze(market, data_dict=multi_tf_data)
                 details['multi_tf'] = {
                     'action': multi_tf_action,
                     'confidence': multi_tf_conf,
@@ -330,12 +331,12 @@ class EnhancedTradingEngine:
 _enhanced_engine = None
 
 
-def get_enhanced_engine(use_rl: bool = False) -> EnhancedTradingEngine:
+def get_enhanced_engine(use_rl: bool = True) -> EnhancedTradingEngine:
     """
     Enhanced engine 싱글톤 인스턴스 반환
     
     Args:
-        use_rl: RL Agent 사용 여부 (기본값: False)
+        use_rl: RL Agent 사용 여부 (기본값: True)
     
     Usage:
         from app.trading.enhanced_engine import get_enhanced_engine

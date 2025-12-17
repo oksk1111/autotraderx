@@ -361,6 +361,19 @@ class BacktestTradingEnv(TradingEnv):
         # 필요한 컬럼만 선택
         if 'timestamp' in data.columns:
             data = data.sort_values('timestamp')
+            # 타임스탬프 등 비수치 컬럼 제거
+            data = data.drop(columns=['timestamp'], errors='ignore')
+            
+        if 'date' in data.columns:
+            data = data.drop(columns=['date'], errors='ignore')
+            
+        # Unnamed: 0 같은 인덱스 컬럼 제거
+        cols_to_drop = [c for c in data.columns if 'Unnamed' in c]
+        if cols_to_drop:
+            data = data.drop(columns=cols_to_drop)
+            
+        # NaN 값 처리 (앞의 값으로 채우고, 나머지는 0으로 채움)
+        data = data.fillna(method='ffill').fillna(0)
         
         super().__init__(
             market=market,
