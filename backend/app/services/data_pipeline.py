@@ -82,20 +82,26 @@ class HistoricalDataService:
         for market in self.markets:
             results[market] = {}
             for interval in intervals:
-                try:
-                    # API 호출 간격 조절 (Rate Limit 방지)
-                    await asyncio.sleep(0.2)
-                    
-                    candles = await loop.run_in_executor(None, pyupbit.get_ohlcv, market, interval, 200)
-                    if candles is not None and len(candles) > 0:
-                        df = candles.reset_index()
-                        if 'index' in df.columns:
-                            df = df.drop(columns=['index'])
-                        results[market][interval] = df.to_dict("records")
-                    else:
-                        logger.warning(f"No data received for {market} {interval}")
-                        results[market][interval] = []
-                except Exception as e:
-                    logger.error(f"Error fetching data for {market} {interval}: {e}")
+                success = False
+                for attempt in range(3):
+                    try:
+                        # API 호출 간격 조절 (Rate Limit 방지)
+                        await asyncio.sleep(0.3 * (attempt + 1))
+                        
+                        candles = await loop.run_in_executor(None, pyupbit.get_ohlcv, market, interval, 200)
+                        if candles is not None and len(candles) > 0:
+                            df = candles.reset_index()
+                            if 'index' in df.columns:
+                                df = df.drop(columns=['index'])
+                            results[market][interval] = df.to_dict("records")
+                            success = True
+                            break
+                        else:
+                            logger.warning(f"Attempt {attempt+1}: No data for {market} {interval}")
+                    except Exception as e:
+                        logger.warning(f"Attempt {attempt+1} failed for {market} {interval}: {e}")
+                
+                if not success:
+                    logger.error(f"Failed to fetch data for {market} {interval} after 3 attempts")
                     results[market][interval] = []
         return results

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
-from app.ml.feature_builder import build_features_from_market_data
+from app.ml.feature_builder import build_features_from_market_data, calculate_technical_indicators
 from app.services.data_pipeline import HistoricalDataService
 from app.services.trading.emergency_trader import EmergencyTrader
 from app.trading.engine import TradeExecutor, TradingEngine
@@ -154,6 +154,15 @@ async def run_cycle() -> None:
                         df = df.drop(columns=['index'])
                         logger.debug(f"Removed 'index' column from {market} market data")
                     
+                    # 기술적 지표 추가 (CRITICAL FIX for RL Agent & Hybrid Engine)
+                    try:
+                        df = calculate_technical_indicators(df)
+                        # NaN 값 처리 (앞부분 데이터 부족으로 인한 NaN은 제거하거나 채움)
+                        df = df.bfill().ffill().fillna(0)
+                    except Exception as e:
+                        logger.error(f"Failed to calculate indicators for {market}: {e}")
+                        continue
+
                     # Multi-timeframe 데이터 준비
                     multi_tf_dfs = {}
                     for interval, data in market_tf_data.items():
