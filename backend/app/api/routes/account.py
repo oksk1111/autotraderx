@@ -15,8 +15,39 @@ logger = get_logger(__name__)
 def get_account_balance():
     """실시간 계정 잔고 조회"""
     try:
+        if not settings.upbit_access_key or not settings.upbit_secret_key:
+            logger.warning("Upbit keys are missing.")
+            return {
+                "total_krw": 0,
+                "total_asset_value": 0,
+                "holdings": [],
+                "error": "Upbit API keys are not configured"
+            }
+
         upbit = pyupbit.Upbit(settings.upbit_access_key, settings.upbit_secret_key)
         balances = upbit.get_balances()
+        
+        # Upbit API 에러 처리 (IP 미등록 등)
+        if hasattr(balances, 'get') and balances.get('error'):
+            error_msg = balances.get('error')
+            logger.error(f"Upbit API Error: {error_msg}")
+            # 프론트엔드에서 처리할 수 있도록 구조화된 에러 반환 (500 대신 정상 응답 + 에러 플래그)
+            return {
+                "total_krw": 0,
+                "total_asset_value": 0,
+                "holdings": [],
+                "api_error": error_msg
+            }
+            
+        if not isinstance(balances, list):
+             logger.error(f"Unexpected Upbit response type: {type(balances)} - {balances}")
+             return {
+                "total_krw": 0,
+                "total_asset_value": 0,
+                "holdings": [],
+                "api_error": "Unexpected response from exchange"
+            }
+            
         krw_balance = float(upbit.get_balance("KRW") or 0)
         
         # 보유 코인 목록
