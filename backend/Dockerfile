@@ -15,4 +15,7 @@ COPY models ./models
 COPY alembic.ini ./
 COPY alembic ./alembic
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 시작 스크립트 권한 부여
+RUN chmod +x ./scripts/start.sh
+
+CMD ["./scripts/start.sh"]
