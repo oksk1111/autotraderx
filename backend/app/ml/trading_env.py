@@ -8,10 +8,20 @@
 
 from __future__ import annotations
 
-import gym
+try:
+    import gym
+    from gym import spaces
+    GYM_AVAILABLE = True
+except ImportError:
+    GYM_AVAILABLE = False
+    # Mock for type hinting compatibility
+    class MockEnv:
+        pass
+    gym = type('obj', (object,), {'Env': MockEnv})
+    spaces = type('obj', (object,), {'Box': lambda *a, **k: None, 'Discrete': lambda *a, **k: None})
+
 import numpy as np
 import pandas as pd
-from gym import spaces
 from typing import Tuple, Dict, Optional
 
 from app.core.logging import get_logger
