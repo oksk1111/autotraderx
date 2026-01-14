@@ -8,8 +8,14 @@ from typing import Dict, Optional
 
 import lightgbm as lgb
 import numpy as np
-import torch
-
+try:
+    import torch
+    ML_AVAILABLE = True
+except ImportError:
+    import logging
+    logging.getLogger(__name__).warning("Torch not found. ModelManager disabled.")
+    ML_AVAILABLE = False
+    
 from app.core.logging import get_logger
 from app.ml.predictor import LSTMModel, MLSignal
 
@@ -24,7 +30,10 @@ class MultiCoinModelManager:
     
     def __init__(self, model_base_dir: str = "/app/models"):
         self.model_base_dir = Path(model_base_dir)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if ML_AVAILABLE:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = "cpu"
         
         # 마켓별 모델 저장소
         self.models: Dict[str, Dict[str, any]] = {}
@@ -44,6 +53,9 @@ class MultiCoinModelManager:
         Returns:
             성공 여부
         """
+        if not ML_AVAILABLE:
+            return False
+
         # 이미 로드된 경우
         if market in self.models:
             logger.debug(f"Model for {market} already loaded")

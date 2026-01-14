@@ -7,8 +7,18 @@ from typing import Dict, Union
 
 import lightgbm as lgb
 import numpy as np
-import torch
-import torch.nn as nn
+
+try:
+    import torch
+    import torch.nn as nn
+    ML_AVAILABLE = True
+except ImportError:
+    ML_AVAILABLE = False
+    logger.warning("Torch not found. ML features will be disabled.")
+    # Mock for type hinting or conditional definition
+    class MockModule:
+        pass
+    nn = type('obj', (object,), {'Module': MockModule, 'LSTM': MockModule, 'Dropout': MockModule, 'Linear': MockModule, 'ReLU': MockModule})
 
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
@@ -78,7 +88,11 @@ class HybridPredictor:
     def __init__(self, model_dir: str = "/app/models", settings: Settings | None = None):
         self.settings = settings or get_settings()
         self.model_dir = Path(model_dir)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        if ML_AVAILABLE:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = "cpu"
         
         # 단일 모델 로딩 (레거시 지원)
         self.lstm_model = None
@@ -89,6 +103,10 @@ class HybridPredictor:
         self._model_manager = None
         
         try:
+            if not ML_AVAILABLE:
+                logger.warning("ML libraries (Torch) not found. ML predictions will be disabled.")
+                return
+
             # 설정 확인: ML 모델 사용 비활성화 시 로딩 스킵
             if hasattr(self.settings, 'use_ml_models') and not self.settings.use_ml_models:
                 logger.info("ML models are disabled by configuration (use_ml_models=False). Skipping model loading.")
@@ -150,8 +168,9 @@ class HybridPredictor:
         """
         market = str(features.get("market", "KRW-BTC"))
         
-        # ML 모델이 비활성화되었거나 로드되지 않은 경우 기본값(중립) 반환
-        if (hasattr(self.settings, 'use_ml_models') and not self.settings.use_ml_models) or \
+        # ML 라이브러리가 없거나, 모델이 비활성화되었거나, 로드되지 않은 경우 기본값(중립) 반환
+        if not ML_AVAILABLE or \
+           (hasattr(self.settings, 'use_ml_models') and not self.settings.use_ml_models) or \
            (self.lstm_model is None and self.lgb_model is None and self._model_manager is None):
             return MLSignal(
                 market=market,
