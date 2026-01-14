@@ -43,6 +43,14 @@ class TradingEngine:
             return TradeDecisionResult(False, "HOLD", market, 0.0, "System inactive", False)
 
         ml_signal = self.predictor.infer({"market": market, **features})
+        
+        # ML 모델이 비활성화된 경우(Confidence=0.0), 기술적 지표만으로 판단하거나 Skip
+        # 여기서는 기본적으로 ML Signal이 없으면 TradingEngine은 HOLD를 반환함.
+        # BreakoutStrategy 등 상위 엔진에서 이미 처리했으므로 여기로 도달했다면 
+        # ML 기반 로직을 원했지만 모델이 없는 경우임.
+        if ml_signal.confidence == 0.0:
+             return TradeDecisionResult(False, "HOLD", market, 0.0, "ML models disabled", False)
+
         logger.info(f"🤖 {market} ML 예측: {ml_signal.action} (Buy: {ml_signal.buy_probability:.1%}, Sell: {ml_signal.sell_probability:.1%}, Confidence: {max(ml_signal.buy_probability, ml_signal.sell_probability):.1%})")
         
         # 신호 필터링: 연속 신호 차단 (단, 고신뢰도는 허용)
@@ -220,10 +228,32 @@ class TradeExecutor:
         
         # 투자 금액 계산: 가용 자금 * 투자 비율
         if available_balance is None:
-            available_balance = self.settings.default_trade_amount
+            # [Fix] 가용 잔고가 전달되지 않은 경우 실시간 조회 시도
+            try:
+                import pyupbit
+                u = pyupbit.Upbit(self.settings.upbit_access_key, self.settings.upbit_secret_key)
+                bal = u.get_balance("KRW")
+                if bal is not None:
+                    available_balance = float(bal)
+                else:
+                    available_balance = self.settings.default_trade_amount
+            except Exception:
+                available_balance = self.settings.default_trade_amount
         
         trade_amount = available_balance * decision.investment_ratio
         
+        # [Fix] 최소 주문 금액 보정 (Upbit 최소 5,000원)
+        if trade_amount < 6000:
+            trade_amount = 6000
+        
+        # 잔고가 부족한 경우 최대 가용 금액 사용
+        if trade_amount > available_balance:
+            trade_amount = available_balance * 0.995 # 수수료 고려
+            
+        if trade_amount < 5000:
+            logger.warning(f"⚠️ 주문 금액 부족 (최소 5,000원): 산출금액 {trade_amount:,.0f}원 / 가용 {available_balance:,.0f}원")
+            return
+
         # 실제 Upbit API 호출하여 거래 실행
         import pyupbit
         try:
@@ -289,7 +319,20 @@ class TradeExecutor:
                     except Exception as e:
                         logger.error(f"포지션 종료 실패: {e}")
                 else:
-                    logger.warning(f"⚠️ SELL 실패: {decision.market} 보유량 없음")
+                    logger.warning(f"⚠️ SELL 실패: {decision.market} 보유량 없음 (DB 동기화 진행)")
+                    # 실제 보유량이 없는데 DB에 OPEN으로 남아있다면 강제 종료 (Sync fix)
+                    try:
+                        positions = db.query(TradePosition).filter(
+                            TradePosition.market == decision.market,
+                            TradePosition.status == "OPEN"
+                        ).all()
+                        if positions:
+                            for pos in positions:
+                                pos.status = "CLOSED"
+                            db.commit()
+                            logger.info(f"📝 유령 포지션 강제 종료: {decision.market} ({len(positions)}건)")
+                    except Exception as e:
+                        logger.error(f"유령 포지션 정리 실패: {e}")
                     result = None
             else:
                 result = None

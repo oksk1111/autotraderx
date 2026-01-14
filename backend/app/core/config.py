@@ -32,10 +32,13 @@ class Settings(BaseSettings):
     upbit_access_key: str = ""
     upbit_secret_key: str = ""
 
-    # AI/LLM 설정 (ML 우선, LLM은 선택적)
-    use_ai_verification: bool = False  # ML 기반 거래로 전환
-    use_groq: bool = False  # Groq API rate limit 문제로 비활성화
-    use_ollama: bool = False  # 필요시 활성화 (현재는 ML만 사용)
+    # AI/LLM 설정
+    use_ai_verification: bool = False  # ML 및 LLM 검증 비활성화 -> 기술적 지표/전략 알고리즘 우선
+    use_groq: bool = False
+    use_ollama: bool = False
+    
+    # ML 모델 사용 여부 (Configurable) - v4.1 Update
+    use_ml_models: bool = False  # ML 모델 로드 및 예측 비활성화 (클라우드 비용/리소스 절감)
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
     ollama_base_url: str = "http://host.docker.internal:11434"
@@ -74,6 +77,13 @@ class Settings(BaseSettings):
     tick_interval_seconds: int = 60  # tick 매매 주기 (초단위, 기본값: 1분)
     tick_min_confidence: float = 0.6  # tick 매매 최소 신뢰도 (기본값: 60%, v4.0 조정)
     tick_max_positions: int = 5  # tick 매매 최대 동시 포지션 수
+
+    # 펌핑 감지 (Pump Detection) 설정 [v4.1]
+    pump_detection_enabled: bool = True
+    pump_threshold_percent: float = 1.5  # 1.5% 이상 급등 시 감지
+    pump_check_interval: float = 2.0  # 2초마다 체크
+    pump_lookback_seconds: int = 60  # 최근 60초 기준 상승률
+    pump_investment_ratio: float = 0.2  # 펌핑 감지 시 자산의 20% 투입
 
     tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL"]
 

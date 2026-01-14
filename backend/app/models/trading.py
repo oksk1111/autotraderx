@@ -31,6 +31,7 @@ class AutoTradingConfig(Base, TimestampMixin):
     max_positions: Mapped[int] = mapped_column(Integer, default=3)
     default_trade_amount: Mapped[float] = mapped_column(Float, default=50_000.0)
     trading_cycle_seconds: Mapped[int] = mapped_column(Integer, default=60)
+    strategy_option: Mapped[str] = mapped_column(String(32), default="breakout_strategy")  # momentum, reversal, or breakout
 
 
 class TradePosition(Base, TimestampMixin):

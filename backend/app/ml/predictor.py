@@ -89,6 +89,14 @@ class HybridPredictor:
         self._model_manager = None
         
         try:
+            # 설정 확인: ML 모델 사용 비활성화 시 로딩 스킵
+            if hasattr(self.settings, 'use_ml_models') and not self.settings.use_ml_models:
+                logger.info("ML models are disabled by configuration (use_ml_models=False). Skipping model loading.")
+                self.lstm_model = None
+                self.lgb_model = None
+                self.scaler = None
+                return
+
             self._load_models()
             logger.info(f"Models loaded successfully from {model_dir} on {self.device}")
         except Exception as e:
@@ -141,6 +149,18 @@ class HybridPredictor:
             MLSignal: 예측 결과
         """
         market = str(features.get("market", "KRW-BTC"))
+        
+        # ML 모델이 비활성화되었거나 로드되지 않은 경우 기본값(중립) 반환
+        if (hasattr(self.settings, 'use_ml_models') and not self.settings.use_ml_models) or \
+           (self.lstm_model is None and self.lgb_model is None and self._model_manager is None):
+            return MLSignal(
+                market=market,
+                buy_probability=0.0,
+                sell_probability=0.0,
+                emergency_score=0.0,
+                confidence=0.0
+            )
+
         sequence = features.get("sequence")
         
         # 시퀀스가 제공된 경우 다중 코인 모델 매니저 사용

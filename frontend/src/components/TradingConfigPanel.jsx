@@ -4,15 +4,6 @@ import axios from "axios";
 
 const api = axios.create({ baseURL: "/api" });
 
-const CYCLE_PRESETS = [
-  { label: "1m", value: 60 },
-  { label: "3m", value: 180 },
-  { label: "5m", value: 300 },
-  { label: "10m", value: 600 },
-  { label: "30m", value: 1800 },
-  { label: "1h", value: 3600 },
-];
-
 function TradingConfigPanel() {
   const queryClient = useQueryClient();
   const [customCycle, setCustomCycle] = useState("");
@@ -50,9 +41,16 @@ function TradingConfigPanel() {
     }
   };
 
+  const handleStrategyChange = (e) => {
+    if (config) {
+      updateMutation.mutate({ ...config, strategy_option: e.target.value });
+    }
+  };
+
   if (isLoading) return <div className="panel loading">Loading config...</div>;
 
   const currentCycle = config?.trading_cycle_seconds || 60;
+  const currentStrategy = config?.strategy_option || "reversal_strategy";
   const isActive = config?.is_active || false;
 
   return (
@@ -74,25 +72,36 @@ function TradingConfigPanel() {
         </div>
       </div>
 
+      <div style={{ marginBottom: '1.5rem', padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
+        <label className="stat-label" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Strategy Options</label>
+        <select 
+            value={currentStrategy} 
+            onChange={handleStrategyChange}
+            style={{ 
+                width: '100%', 
+                padding: '0.8rem', 
+                background: 'var(--bg-secondary)', 
+                color: 'var(--text-primary)', 
+                border: '1px solid var(--border-color)',
+                borderRadius: '4px',
+                fontSize: '1rem',
+                cursor: 'pointer'
+            }}
+        >
+            <option value="momentum_strategy" style={{ background: '#1e293b', color: '#f1f5f9' }}>Option 1: 추격 매수 (Momentum / Pump)</option>
+            <option value="reversal_strategy" style={{ background: '#1e293b', color: '#f1f5f9' }}>Option 2: 역추세 매매 (Reversal: Peak Sell / Dip Buy)</option>
+        </select>
+        <div style={{ marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+            {currentStrategy === 'momentum_strategy' 
+                ? "🚀 급등 시 매수하여 상승세에 편승합니다." 
+                : "📉 급락 시 매수, 급등 시 매도하여 변동성을 활용합니다."}
+        </div>
+      </div>
+
       <div style={{ marginBottom: '1rem' }}>
         <label className="stat-label" style={{ display: 'block', marginBottom: '0.5rem' }}>Trading Cycle</label>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          {CYCLE_PRESETS.map((preset) => (
-            <button
-              key={preset.value}
-              onClick={() => handlePresetClick(preset.value)}
-              style={{
-                padding: '0.5rem 1rem',
-                borderRadius: '6px',
-                border: '1px solid var(--border)',
-                background: currentCycle === preset.value ? 'var(--primary)' : 'var(--bg-card)',
-                color: currentCycle === preset.value ? 'white' : 'var(--text-muted)',
-                cursor: 'pointer'
-              }}
-            >
-              {preset.label}
-            </button>
-          ))}
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+          Managed automatically by Pump Detection System (Real-time)
         </div>
       </div>
     </div>

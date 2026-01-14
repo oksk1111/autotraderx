@@ -36,6 +36,14 @@ beat_schedule = {
     },
 }
 
+# 펌핑 감지 모드 활성화 시 스케줄 추가
+if settings.pump_detection_enabled:
+    beat_schedule['pump-detection-loop'] = {
+        'task': 'app.celery_app.run_pump_detection',
+        'schedule': 60.0,  # 1분마다 실행 (내부적으로 55초 루프)
+    }
+    logger.info(f"🚀 Pump detection enabled: {settings.pump_threshold_percent}% threshold, {settings.pump_check_interval}s interval")
+
 # 공격적 매매 모드가 활성화되면 tick 매매 스케줄 추가
 if settings.aggressive_trading_mode:
     beat_schedule['tick-trading-cycle'] = {
@@ -77,6 +85,15 @@ def run_tick_trading() -> str:
 
     logger.debug("Triggering tick trading cycle")
     asyncio.run(run_tick_cycle())
+    return "ok"
+
+
+@celery_app.task
+def run_pump_detection() -> str:
+    from app.tasks.trading import run_pump_detection_loop  # pylint: disable=import-outside-toplevel
+
+    logger.info("Triggering pump detection loop")
+    asyncio.run(run_pump_detection_loop())
     return "ok"
 
 

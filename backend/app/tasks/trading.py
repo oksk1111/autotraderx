@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import websockets
 import pyupbit
 from sqlalchemy.orm import Session
 
@@ -12,9 +15,15 @@ from app.services.trading.emergency_trader import EmergencyTrader
 from app.trading.engine import TradeExecutor, TradingEngine
 from app.trading.enhanced_engine import get_enhanced_engine
 from app.models.trading import AutoTradingConfig, TradePosition
+from app.trading.market_selector import MarketSelector
+from app.trading.breakout_strategy import BreakoutTradingStrategy
 
 logger = get_logger(__name__)
 settings = get_settings()
+
+# 전역 인스턴스
+market_selector = MarketSelector(top_k=10, min_volume=30_000_000_000)
+breakout_strategy = BreakoutTradingStrategy()
 
 
 def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
@@ -88,7 +97,10 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
 
 async def run_cycle() -> None:
     logger.info("Starting trading cycle")
-    markets = settings.tracked_markets
+    # 동적 마켓 선정 (Top 10 거래대금)
+    markets = market_selector.get_top_volume_coins()
+    logger.info(f"Selected Markets: {markets}")
+    
     data_service = HistoricalDataService(markets)
     
     # 시장별 멀티 타임프레임 데이터 가져오기 (1h, 15m, 5m)
@@ -431,3 +443,241 @@ async def run_tick_cycle() -> None:
         logger.error(f"Error in tick trading cycle: {e}", exc_info=True)
     finally:
         db.close()
+
+
+async def run_pump_detection_loop() -> None:
+    """
+    실시간 모니터링 루프 (WebSocket 기반, 1분간 지속 실행)
+    Mode 1: Momentum Strategy (Pump buy)
+    Mode 2: Reversal Strategy (Peak sell, Dip buy)
+    Mode 3: Breakout Strategy (Trend Following) - **DEFAULT (v4.1)**
+    """
+    if not settings.pump_detection_enabled:
+        return
+
+    import time
+    from app.trading.pump_detector import PumpDetector
+    from app.trading.reversal_strategy import ReversalTradingStrategy
+    from app.trading.engine import TradeDecisionResult
+    from app.models.trading import AutoTradingConfig
+    
+    # breakout_strategy는 전역 변수 사용
+
+    db = SessionLocal()
+    
+    # 0. 전략 모드 확인
+    try:
+        config_obj = db.query(AutoTradingConfig).order_by(AutoTradingConfig.id.desc()).first()
+        # 기본값: breakout_strategy
+        strategy_mode = getattr(config_obj, "strategy_option", "breakout_strategy")
+        if not strategy_mode or strategy_mode == "reversal_strategy": 
+            # 사용자 요청으로 Reversal -> Breakout 강제 전환 (또는 Config가 없을 때)
+            strategy_mode = "breakout_strategy"
+            
+    except Exception as e:
+        logger.error(f"Failed to load strategy config: {e}")
+        strategy_mode = "breakout_strategy"
+
+    logger.info(f"🚀 Starting Real-time Monitoring Loop: Mode={strategy_mode} (55s)")
+    
+    detector = None
+    reversal_strategy = None
+    # markets = settings.tracked_markets # OLD
+    # 동적 마켓 사용
+    markets = market_selector.get_top_volume_coins()
+    
+    # 전략 초기화
+    if strategy_mode == "momentum_strategy":
+        detector = PumpDetector()
+    elif strategy_mode == "reversal_strategy":
+        reversal_strategy = ReversalTradingStrategy(settings)
+    # BreakoutStrategy는 전역 인스턴스 사용
+
+    start_time = time.time()
+    
+    # 전략용 데이터 캐시 (시작 시 1회 로드)
+    # Breakout 및 Reversal 모두 과거 데이터 필요
+    cached_dfs = {}
+    if strategy_mode in ["reversal_strategy", "breakout_strategy"]:
+        try:
+            logger.info(f"loading historical data for {strategy_mode}...")
+            for m in markets:
+                # API 호출 속도 제한 고려
+                df = pyupbit.get_ohlcv(m, interval="minute1", count=200)
+                if df is not None:
+                    cached_dfs[m] = df
+                time.sleep(0.05) 
+        except Exception as e:
+            logger.warning(f"Initial data load failed: {e}")
+
+    executor = TradeExecutor(settings)
+    
+    try:
+        # 1. 현재 오픈된 포지션 로드
+        open_positions = db.query(TradePosition).filter(TradePosition.status == "OPEN").all()
+        monitored_positions = {p.market: p for p in open_positions}
+        
+        # WebSocket 연결 (Async direct implementation)
+        import websockets
+        import json
+        uri = "wss://api.upbit.com/websocket/v1"
+        subscribe_fmt = [{"ticket": "UNIQUE_TICKET"}, {"type": "ticker", "codes": markets, "isOnlyRealtime": True}]
+        
+        websocket = await websockets.connect(uri)
+        await websocket.send(json.dumps(subscribe_fmt))
+        
+        while time.time() - start_time < 55:
+            try:
+                msg = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+                data = json.loads(msg)
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                logger.error(f"WS Recv Error: {e}")
+                break
+                
+            market = data.get('code')
+            if not market: continue
+            price = float(data.get('trade_price'))
+            volume = float(data.get('acc_trade_price_24h'))
+            
+            # --- [A] 공통: 실시간 Stop Loss / Take Profit (기존 로직 유지) ---
+            if market in monitored_positions:
+                pos = monitored_positions[market]
+                if price <= pos.stop_loss:
+                    logger.warning(f"🛑 Real-time Stop Loss: {market} {price}")
+                    decision = TradeDecisionResult(True, "SELL", market, 1.0, "Real-time Stop Loss", True, 1.0)
+                    executor.execute(db, decision)
+                    del monitored_positions[market]
+                    continue
+                elif price >= pos.take_profit:
+                    logger.info(f"💰 Real-time Take Profit: {market} {price}")
+                    decision = TradeDecisionResult(True, "SELL", market, 1.0, "Real-time Take Profit", False, 1.0)
+                    executor.execute(db, decision)
+                    del monitored_positions[market]
+                    continue
+
+            # --- [B] 전략별 진입/청산 로직 ---
+            
+            # Option 1: Momentum (Pump)
+            if strategy_mode == "momentum_strategy" and detector:
+                # v4.1: 거래대금 필터 추가된 PumpDetector 사용
+                is_pump, change_pct = detector.check_pump(market, price, current_volume_24h=volume)
+                if is_pump:
+                    logger.warning(f"🚨 PUMP ALERT: {market} +{change_pct:.2f}%")
+                    if market in monitored_positions: continue
+                    
+                    decision = TradeDecisionResult(
+                        True, "BUY", market, 0.95, 
+                        f"Pump +{change_pct:.2f}%", False, 
+                        settings.pump_investment_ratio
+                    )
+                    executor.execute(db, decision, None)
+
+            # Option 2: Reversal (Peak Sell, Dip Buy)
+            elif strategy_mode == "reversal_strategy" and reversal_strategy:
+                df = cached_dfs.get(market)
+                if df is None: continue
+                
+                action, conf, reason = reversal_strategy.analyze(market, price, df)
+                
+                if action == "SELL":
+                    if market in monitored_positions:
+                        logger.info(f"📉 PEAK SELL Signal for {market}: {reason}")
+                        decision = TradeDecisionResult(
+                            True, "SELL", market, conf, 
+                            f"Reversal Peak Sell: {reason}", False, 1.0
+                        )
+                        executor.execute(db, decision)
+                        del monitored_positions[market]
+                        
+                elif action == "BUY":
+                    if market not in monitored_positions:
+                        existing = db.query(TradePosition).filter(TradePosition.market==market, TradePosition.status=="OPEN").first()
+                        if existing:
+                            monitored_positions[market] = existing
+                            continue
+
+                        decision = TradeDecisionResult(
+                            True, "BUY", market, conf, 
+                            f"Reversal Dip Buy: {reason}", False, 
+                            settings.pump_investment_ratio, 
+                            max_loss_acceptable=0.03, 
+                            take_profit_target=0.03
+                        )
+                        executor.execute(db, decision, None)
+
+            # Option 3: Breakout Strategy (Trend Following) - NEW
+            elif strategy_mode == "breakout_strategy":
+                df = cached_dfs.get(market)
+                # 데이터 갱신 (마지막 row의 close price 정도만 업데이트 해주는게 좋지만, 여기선 근사치 사용)
+                # 더 정확하게 하려면 DataFrame의 마지막 Row를 현재가/거래량으로 업데이트 해야함.
+                if df is None: continue
+                
+                # Real-time data injection (Update last candle temporarily)
+                # 간단하게 현재가 반영을 위해 copy 후 수정
+                # (빈번한 copy는 성능 이슈가 있지만 5분주기+WS조합이므로 1초에 수십건 아니면 괜찮음)
+                # 하지만 Python DataFrame copy는 꽤 무거움. 
+                # 전략이 '종가' 기준이 많으므로 현재가가 종가라고 가정하고 분석 Execute.
+                
+                # BreakoutStrategy.analyze는 DataFrame 전체를 보므로, 
+                # 마지막 캔들의 Close를 현재가로 덮어쓰거나, 새로운 캔들을 임시로 추가해야 함.
+                # 편의상 '현재 캔들'이 아직 완성되지 않았지만 현재가로 형성중이라고 가정.
+                
+                # df.iloc[-1, df.columns.get_loc('close')] = price (SettingWithCopyWarning 주의)
+                # 여기서는 원본 df 손상 방지를 위해 복사본 없이 analyze 내에서 처리하거나,
+                # 그냥 직전 확정 캔들 + 현재가 별도 전달이 나음.
+                # 하지만 BreakoutStrategy.analyze 인터페이스는 market, df 임.
+                # BreakoutStrategy 내부에서 df.iloc[-1]을 참조하므로,
+                # 여기서 df의 마지막 row를 업데이트해서 넘겨줘야 실시간 반영됨.
+                pass 
+                # (TODO: Optimize DataFrame update)
+                
+                # 일단 단순하게, df는 1분 전 데이터이므로 실시간 급등 반영이 늦을 수 있음.
+                # 따라서 BreakoutStrategy를 'Current Price'를 인자로 받도록 수정하거나
+                # 여기서 약간의 트릭 사용.
+                
+                # -> BreakoutStrategy를 수정하지 않고, 여기서 df를 살짝 수정해서 넘김
+                # (Warning ignore)
+                last_idx = df.index[-1]
+                df.at[last_idx, 'close'] = price
+                # 거래량은 누적이므로 API가 주는 누적거래량이 24h라 캔들 볼륨과 다름.
+                # 캔들 볼륨 추정 불가하므로 이전 볼륨 그대로 사용하되, 가격 돌파 위주로 봄.
+                
+                bo_action, bo_conf, bo_reason = breakout_strategy.analyze(market, df)
+                
+                if bo_action == "BUY":
+                    if market not in monitored_positions:
+                        logger.info(f"🚀 BREAKOUT BUY: {market} {bo_conf:.1%} - {bo_reason}")
+                        
+                        existing = db.query(TradePosition).filter(TradePosition.market==market, TradePosition.status=="OPEN").first()
+                        if existing:
+                            monitored_positions[market] = existing
+                            continue
+                            
+                        decision = TradeDecisionResult(
+                            True, "BUY", market, bo_conf, 
+                            f"Trend Breakout: {bo_reason}", False, 
+                            0.2, # 20% investment
+                            max_loss_acceptable=0.02, # -2% SL (Trend following usually tight SL)
+                            take_profit_target=0.05   # +5% TP (Let profits run)
+                        )
+                        executor.execute(db, decision, None)
+                
+                elif bo_action == "SELL":
+                     if market in monitored_positions:
+                        logger.info(f"📉 TREND BROKEN: {market} - {bo_reason}")
+                        decision = TradeDecisionResult(
+                            True, "SELL", market, bo_conf, 
+                            f"Trend Broken: {bo_reason}", False, 1.0
+                        )
+                        executor.execute(db, decision)
+                        del monitored_positions[market]
+                        
+        await websocket.close()
+            
+    except Exception as e:
+        logger.error(f"Error in monitoring loop: {e}")
+    finally:
+        db.close()
+

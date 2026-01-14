@@ -24,6 +24,7 @@ class AutoTradingConfigSchema(BaseModel):
     max_positions: int = 3
     default_trade_amount: float = 50_000
     trading_cycle_seconds: int = 60
+    strategy_option: str = "reversal_strategy"
 
 
 class TradeLogSchema(BaseModel):

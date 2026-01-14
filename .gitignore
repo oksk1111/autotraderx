@@ -91,3 +91,7 @@ backend/data/
 *.pth
 *.pkl
 lightgbm_model.txt
+
+# Oracle Cloud key
+ignored/backend/celerybeat-schedule
+ignored/
