@@ -1,0 +1,24 @@
+{
+  "market": "KRW-BTC",
+  "interval": "minute60",
+  "model_type": "lstm_lightgbm_hybrid",
+  "device": "cpu",
+  "trained_at": "2025-11-20T15:15:11.264421",
+  "lstm_config": {
+    "input_size": 46,
+    "hidden_size": 128,
+    "num_layers": 2,
+    "dropout": 0.3
+  },
+  "sequence_length": 24,
+  "n_features": 46,
+  "train_size": 1320,
+  "val_size": 290,
+  "test_size": 285,
+  "test_accuracy": 0.8666666666666667,
+  "class_distribution": {
+    "sell": 55,
+    "hold": 173,
+    "buy": 57
+  }
+}

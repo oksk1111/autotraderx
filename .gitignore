@@ -85,12 +85,12 @@ api_keys/
 *.pid.lock
 
 # ML Models and Data (large files)
-backend/models/
+# backend/models/
 backend/models_all/
-backend/data/
-*.pth
-*.pkl
-lightgbm_model.txt
+# backend/data/
+# *.pth
+# *.pkl
+# lightgbm_model.txt
 
 # Oracle Cloud key
 ignored/backend/celerybeat-schedule
