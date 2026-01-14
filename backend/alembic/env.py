@@ -16,6 +16,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# 환경 변수에서 DB URL 주입 (alembic.ini 설정 덮어쓰기)
+from app.core.config import get_settings
+settings = get_settings()
+config.set_main_option("sqlalchemy.url", settings.resolved_database_url)
+
 # SQLAlchemy Base 메타데이터 가져오기
 from app.db.base import Base
 from app.models import trading  # 기존 trading 모델
