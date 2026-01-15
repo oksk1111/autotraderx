@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import datetime
+from datetime import timedelta, timezone
 import websockets
 import pyupbit
 from sqlalchemy.orm import Session
@@ -90,6 +92,33 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
                     investment_ratio=1.0
                 )
                 executor.execute(db, decision)
+
+            # Time Limit 체크
+            elif settings.max_position_hold_minutes > 0:
+                # 포지션 보유 시간 계산
+                now = datetime.datetime.now(datetime.timezone.utc)
+                entry_time = pos.created_at
+                
+                # DB에서 가져온 시간이 Naive할 경우 UTC로 간주
+                if entry_time.tzinfo is None:
+                    entry_time = entry_time.replace(tzinfo=datetime.timezone.utc)
+                
+                elapsed = now - entry_time
+                limit = datetime.timedelta(minutes=settings.max_position_hold_minutes)
+                
+                if elapsed > limit:
+                    logger.info(f"⏰ Time Limit Triggered for {pos.market}: Held for {elapsed} (> {settings.max_position_hold_minutes}m)")
+                    
+                    decision = TradeDecisionResult(
+                        approved=True,
+                        action="SELL",
+                        market=pos.market,
+                        confidence=1.0,
+                        rationale=f"Time Limit Exceeded (>{settings.max_position_hold_minutes}m)",
+                        emergency=False, 
+                        investment_ratio=1.0
+                    )
+                    executor.execute(db, decision)
                 
     except Exception as e:
         logger.error(f"Error managing positions: {e}", exc_info=True)
