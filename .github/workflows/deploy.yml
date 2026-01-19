@@ -12,55 +12,51 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
       - name: Deploy to Oracle Cloud
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-        run: |
-          # SSH 키 설정
-          mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H $SERVER_HOST >> ~/.ssh/known_hosts 2>/dev/null
-          
-          # 서버에서 배포 실행
-          ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << 'EOF'
-            cd ~/autotraderx
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /home/mingky/workspace/autotraderx
             
             echo "=== 최신 코드 Pull ==="
             git fetch origin
+            # 현재 브랜치 확인 후 reset
             git reset --hard origin/master || git reset --hard origin/main
             
             echo "=== Docker Compose 재빌드 및 실행 ==="
+            # 불필요한 이미지 정리
+            docker image prune -f
+            
+            # 서비스 재시작
             docker compose down
             docker compose up -d --build
             
             echo "=== 배포 완료 ==="
             docker compose ps
-          EOF
-      
+
       - name: Health Check
-        env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
         run: |
           echo "Waiting for services to start..."
-          sleep 30
+          sleep 60  # 서비스 시작 대기 시간 증가
+          
+          SERVER_HOST=${{ secrets.SERVER_HOST }}
           
           # 백엔드 헬스 체크
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SERVER_HOST:8000/health || echo "000")
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://$SERVER_HOST:8000/health || echo "000")
           
           if [ "$HTTP_STATUS" = "200" ]; then
             echo "✅ Backend health check passed"
           else
             echo "⚠️ Backend health check returned: $HTTP_STATUS"
+            exit 1
           fi
           
           # 프론트엔드 체크
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SERVER_HOST:4173 || echo "000")
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://$SERVER_HOST:4173 || echo "000")
           
           if [ "$HTTP_STATUS" = "200" ]; then
             echo "✅ Frontend health check passed"
@@ -75,14 +71,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # Slack 알림 (설정된 경우)
-          if [ -n "$SLACK_WEBHOOK_URL" ]; then
-            curl -X POST $SLACK_WEBHOOK_URL \
-              -H 'Content-Type: application/json' \
-              -d '{"text":"❌ AutoTraderX 배포 실패! GitHub Actions 로그를 확인하세요."}'
-          fi
-          
-          # Telegram 알림 (설정된 경우)
+          # Telegram 알림
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
               -d "chat_id=${TELEGRAM_CHAT_ID}" \
@@ -95,7 +84,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          # Telegram 성공 알림 (설정된 경우)
+          # Telegram 성공 알림
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
               -d "chat_id=${TELEGRAM_CHAT_ID}" \
