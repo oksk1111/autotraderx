@@ -18,9 +18,9 @@ jobs:
           username: ubuntu
           key: ${{ secrets.ORACLE_SSH_KEY }}
           port: 22
-          script_stop: true
           command_timeout: 40m  # 타임아웃 20분 -> 40분으로 증가
           script: |
+            set -e  # 오류 발생 시 즉시 중단
             # 1. 작업 디렉토리 확인 및 생성
             TARGET_DIR="/home/ubuntu/autotraderx"
             # 디렉토리가 없거나, 디렉토리인데 .git이 없으면 (잘못된 상태) 재설정
