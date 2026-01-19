@@ -89,8 +89,13 @@ jobs:
             echo "=== Health Check Started ==="
             # Retry loop: 12 attempts * 10s = 2 minutes max wait
             MAX_RETRIES=12
-            BACKEND_URL="http://localhost:8000/health"
-            FRONTEND_URL="http://localhost:4173"
+            # Use 127.0.0.1 to avoid IPv6 issues with localhost
+            BACKEND_URL="http://127.0.0.1:8000/health"
+            FRONTEND_URL="http://127.0.0.1:4173"
+            
+            # Check if ports are listening
+            echo "--- Port Status ---"
+            sudo netstat -tulpn | grep -E '8000|4173' || echo "Ports not found in netstat"
             
             check_service() {
               local url=$1
