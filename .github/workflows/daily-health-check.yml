@@ -18,11 +18,11 @@ jobs:
             SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         with:
           host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          username: ubuntu
+          key: ${{ secrets.ORACLE_SSH_KEY }}
           port: 22
           script: |
-            cd /home/mingky/workspace/autotraderx
+            cd /home/ubuntu/autotraderx
             # Backend 컨테이너 내부에서 헬스 체크 스크립트 실행
             docker compose exec -T backend python /app/scripts/daily_health_check.py
       
