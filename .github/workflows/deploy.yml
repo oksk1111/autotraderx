@@ -90,7 +90,8 @@ jobs:
             # Retry loop: 18 attempts * 10s = 3 minutes max wait
             MAX_RETRIES=18
             # Use 127.0.0.1 to avoid IPv6 issues with localhost
-            BACKEND_URL="http://127.0.0.1:8000/api/health"
+            # Add trailing slash to avoid 307 Redirect
+            BACKEND_URL="http://127.0.0.1:8000/api/health/"
             FRONTEND_URL="http://127.0.0.1:4173"
             
             check_service() {
