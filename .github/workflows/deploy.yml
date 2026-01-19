@@ -78,30 +78,66 @@ jobs:
             # 4. 불필요한 이미지 정리
             $DOCKER_CMD image prune -f
 
-      - name: Health Check
-        run: |
-          echo "Waiting for services to start..."
-          sleep 60  # 서비스 시작 대기 시간
-          
-          SERVER_HOST=${{ secrets.SERVER_HOST }}
-          
-          # 백엔드 체크
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://$SERVER_HOST:8000/health || echo "000")
-          if [ "$HTTP_STATUS" != "200" ]; then
-             echo "⚠️ Backend health check failed: $HTTP_STATUS"
-             # 배포 스크립트 실패 처리를 위해 exit 1 (선택)
-             exit 1
-          else
-             echo "✅ Backend health check passed"
-          fi
-          
-          # 프론트엔드 체크
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://$SERVER_HOST:4173 || echo "000")
-          if [ "$HTTP_STATUS" != "200" ]; then
-             echo "⚠️ Frontend health check failed: $HTTP_STATUS"
-          else
-             echo "✅ Frontend health check passed"
-          fi
+      - name: Health Check via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ubuntu
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          port: 22
+          script: |
+            echo "=== Health Check Started ==="
+            # Retry loop: 12 attempts * 10s = 2 minutes max wait
+            MAX_RETRIES=12
+            BACKEND_URL="http://localhost:8000/health"
+            FRONTEND_URL="http://localhost:4173"
+            
+            check_service() {
+              local url=$1
+              local name=$2
+              local success=0
+              
+              for i in $(seq 1 $MAX_RETRIES); do
+                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$url" || echo "000")
+                if [ "$HTTP_STATUS" = "200" ]; then
+                  echo "✅ $name is UP! (Status: 200)"
+                  success=1
+                  break
+                fi
+                echo "⏳ Waiting for $name... ($i/$MAX_RETRIES) - Current: $HTTP_STATUS"
+                sleep 10
+              done
+              
+              if [ $success -eq 0 ]; then
+                echo "❌ $name failed to respond after $((MAX_RETRIES*10)) seconds."
+                return 1
+              fi
+              return 0
+            }
+
+            # Check Backend
+            if ! check_service "$BACKEND_URL" "Backend"; then
+               echo "--- Backend Logs ---"
+               cd /home/ubuntu/autotraderx
+               # Docker command detection again for logs
+               DOCKER_CMD="docker"
+               if ! groups | grep -q "docker"; then DOCKER_CMD="sudo docker"; fi
+               $DOCKER_CMD compose logs --tail=50 backend
+               exit 1
+            fi
+            
+            # Check Frontend
+            # Frontend might return 200 or 304, usually 200 for root
+            if ! check_service "$FRONTEND_URL" "Frontend"; then
+               echo "--- Frontend Logs ---"
+               cd /home/ubuntu/autotraderx
+               DOCKER_CMD="docker"
+               if ! groups | grep -q "docker"; then DOCKER_CMD="sudo docker"; fi
+               $DOCKER_CMD compose logs --tail=50 frontend
+               exit 1
+            fi
+            
+            echo "=== All Services Healthy ==="
       
       - name: Send Notification
         if: always()
