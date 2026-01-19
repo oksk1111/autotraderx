@@ -231,15 +231,38 @@ async def run_cycle() -> None:
                         if action == "SELL":
                             investment_ratio = 1.0
                         
-                        # 동적 SL/TP 설정 (변동성 대응)
-                        # 기본값: SL -2.5%, TP +4.0%
-                        stop_loss_pct = 0.025
-                        take_profit_pct = 0.040
+                        # ATR 기반 동적 SL/TP 설정 (v4.2 개선)
+                        # ATR(Average True Range)을 활용하여 변동성에 맞는 손절/익절 설정
+                        atr = df.iloc[-1].get('atr', 0)
+                        atr_ratio = df.iloc[-1].get('atr_ratio', 0.02)  # 기본값 2%
+                        current_price = df.iloc[-1].get('close', 0)
                         
-                        # 신뢰도가 높으면 SL을 타이트하게 잡고 TP를 늘림 (확신이 있으므로)
-                        if confidence >= 0.8:
-                            stop_loss_pct = 0.020  # -2.0%
-                            take_profit_pct = 0.060  # +6.0%
+                        if atr > 0 and current_price > 0:
+                            # ATR 배수 기반 SL/TP (변동성 적응형)
+                            # SL: 1.5 ATR, TP: 2.5 ATR (손익비 1:1.67)
+                            atr_sl_multiplier = 1.5
+                            atr_tp_multiplier = 2.5
+                            
+                            # 고신뢰도일수록 더 넓은 TP 허용
+                            if confidence >= 0.8:
+                                atr_tp_multiplier = 3.0  # 손익비 1:2
+                                atr_sl_multiplier = 1.2  # 타이트한 SL
+                            
+                            # ATR 기반 퍼센티지
+                            stop_loss_pct = min((atr * atr_sl_multiplier / current_price), 0.05)  # 최대 5%
+                            take_profit_pct = min((atr * atr_tp_multiplier / current_price), 0.10)  # 최대 10%
+                            
+                            # 최소값 보장
+                            stop_loss_pct = max(stop_loss_pct, 0.015)  # 최소 1.5%
+                            take_profit_pct = max(take_profit_pct, 0.025)  # 최소 2.5%
+                        else:
+                            # ATR 없을 경우 기본값 사용
+                            stop_loss_pct = 0.025
+                            take_profit_pct = 0.040
+                            
+                            if confidence >= 0.8:
+                                stop_loss_pct = 0.020
+                                take_profit_pct = 0.060
                         
                         # TradeDecisionResult 생성
                         from app.trading.engine import TradeDecisionResult
@@ -255,7 +278,7 @@ async def run_cycle() -> None:
                             take_profit_target=take_profit_pct,
                         )
                         
-                        logger.info(f"🚀 Enhanced: {market} {action} ({confidence:.1%}) - {details.get('rationale', '')[:80]}")
+                        logger.info(f"🚀 Enhanced: {market} {action} ({confidence:.1%}) SL:{stop_loss_pct:.1%}/TP:{take_profit_pct:.1%} - {details.get('rationale', '')[:60]}")
                     else:
                         # HOLD 신호
                         from app.trading.engine import TradeDecisionResult

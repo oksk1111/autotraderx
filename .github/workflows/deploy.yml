@@ -1,0 +1,103 @@
+name: Deploy to Cloud
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:  # 수동 실행 가능
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Deploy to Oracle Cloud
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          # SSH 키 설정
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $SERVER_HOST >> ~/.ssh/known_hosts 2>/dev/null
+          
+          # 서버에서 배포 실행
+          ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << 'EOF'
+            cd ~/autotraderx
+            
+            echo "=== 최신 코드 Pull ==="
+            git fetch origin
+            git reset --hard origin/master || git reset --hard origin/main
+            
+            echo "=== Docker Compose 재빌드 및 실행 ==="
+            docker compose down
+            docker compose up -d --build
+            
+            echo "=== 배포 완료 ==="
+            docker compose ps
+          EOF
+      
+      - name: Health Check
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+        run: |
+          echo "Waiting for services to start..."
+          sleep 30
+          
+          # 백엔드 헬스 체크
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SERVER_HOST:8000/health || echo "000")
+          
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "✅ Backend health check passed"
+          else
+            echo "⚠️ Backend health check returned: $HTTP_STATUS"
+          fi
+          
+          # 프론트엔드 체크
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$SERVER_HOST:4173 || echo "000")
+          
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "✅ Frontend health check passed"
+          else
+            echo "⚠️ Frontend health check returned: $HTTP_STATUS"
+          fi
+      
+      - name: Send notification on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          # Slack 알림 (설정된 경우)
+          if [ -n "$SLACK_WEBHOOK_URL" ]; then
+            curl -X POST $SLACK_WEBHOOK_URL \
+              -H 'Content-Type: application/json' \
+              -d '{"text":"❌ AutoTraderX 배포 실패! GitHub Actions 로그를 확인하세요."}'
+          fi
+          
+          # Telegram 알림 (설정된 경우)
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d "chat_id=${TELEGRAM_CHAT_ID}" \
+              -d "text=❌ AutoTraderX 배포 실패! GitHub Actions 로그를 확인하세요."
+          fi
+      
+      - name: Send success notification
+        if: success()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          # Telegram 성공 알림 (설정된 경우)
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d "chat_id=${TELEGRAM_CHAT_ID}" \
+              -d "text=✅ AutoTraderX 배포 완료! 정상적으로 서비스가 시작되었습니다."
+          fi

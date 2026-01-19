@@ -92,6 +92,11 @@ backend/models_all/
 # *.pkl
 # lightgbm_model.txt
 
+# Celery
+celerybeat-schedule
+celerybeat-schedule.db
+celerybeat.pid
+
 # Oracle Cloud key
 ignored/backend/celerybeat-schedule
 ignored/
