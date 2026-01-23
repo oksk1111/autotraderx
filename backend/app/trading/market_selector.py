@@ -30,42 +30,22 @@ class MarketSelector:
             return self.cached_markets
 
         try:
-            # 모든 KRW 마켓 가져오기
+            # 1. 마켓 메타데이터 조회 (유의 종목 확인용)
+            # isDetails=true 파라미터를 통해 유의종목(CAUTION) 여부 확인 가능
+            import requests
+            market_url = "https://api.upbit.com/v1/market/all"
+            market_res = requests.get(market_url, params={"isDetails": "true"})
+            market_warnings = {}
+            if market_res.status_code == 200:
+                for m in market_res.json():
+                    # market_warning: 'NONE', 'CAUTION'
+                    market_warnings[m['market']] = m.get('market_warning', 'NONE')
+            
+            # 모든 KRW 마켓 가져오기 (pyupbit 이용)
             krw_tickers = pyupbit.get_tickers(fiat="KRW")
             
-            # 티커 조회 (가격, 거래대금 등)
-            # get_current_price는 간단하지만 거래대금 정보가 없으므로 get_ohlcv나 get_ticker 대용 함수 필요
-            # 보통 pyupbit.get_ohlcv(ticker, count=1) 로 day 캔들 가져와서 거래대금(value) 확인
-            
-            # 더 효율적인 방법: pyupbit.get_current_price 대신 호가정보나 티커정보 등.. 
-            # 하지만 pyupbit에는 bulk ticker 조회 기능이 get_current_price 외에 제한적일 수 있음.
-            # 다행히 pyupbit.get_ticker 라는 함수가 있으면 좋은데.. 없으면 loop 돌아야 함. (느림)
-            # pyupbit.get_ohlcv는 느릴 수 있음.
-            
-            # 대안: 주요 코인 리스트업이라 API call 최소화. 하지만 Top K를 뽑으려면 다 봐야함.
-            # Quotation API의 'ticker' 엔드포인트를 쓰면 됨. pyupbit.get_current_price는 현재가만 줌.
-            # 직접 request 호출하거나 pyupbit 소스 확인 필요하지만, 안전하게 loop 돌되 
-            # 주요 30-50개만 봐도 될 수도 있음.
-            
-            # 개선: pyupbit의 get_ohlcv는 1건씩이므로, get_daily_ohlcv_from_base() 같은 건 없고..
-            # 그냥 KRW 마켓 전체에 대해 looping 하기엔 너무 많지만(100개+), 5분에 한번이면 괜찮음.
-            
-            market_volumes = []
-            
-            # Batch로 묶어서 처리하거나.. 여기선 일단 상위 인지도 있는거 위주로 하면 좋지만
-            # 사용자 요청이 "급등 코인"이므로 전체 스캔이 필요.
-            
-            # pyupbit.get_ohlcv는 너무 느리므로, Request를 직접 날려서 Ticker 정보(acc_trade_price_24h)를 가져오는게 낫음.
-            # 하지만 pyupbit 라이브러리 사용을 선호.
-            
-            # pyupbit.get_ticker() 같은 함수가 있는지 확인 어렵지만, 
-            # pyupbit.get_quotation(tickers) -> 리스트로 반환. 
-            # 실제 함수명은 get_ticker가 아니라 get_current_price(..., verbose=True) 일수도?
-            # pyupbit 구현상 get_current_price는 'trade_price'만 리턴함 (기본적으로).
-            
-            # 직접 request 사용이 확실함.
-            import requests
-            url = "https://api.upbit.com/v1/ticker"
+            # 2. Ticker 정보 조회 (거래대금 확인용)
+            ticker_url = "https://api.upbit.com/v1/ticker"
             
             # 100개씩 나눠서 요청 (최대 100개 가능할수도)
             chunks = [krw_tickers[i:i + 100] for i in range(0, len(krw_tickers), 100)]
@@ -73,7 +53,7 @@ class MarketSelector:
             all_tickers_data = []
             for chunk in chunks:
                 params = {"markets": ",".join(chunk)}
-                res = requests.get(url, params=params)
+                res = requests.get(ticker_url, params=params)
                 if res.status_code == 200:
                     all_tickers_data.extend(res.json())
                 time.sleep(0.1)
@@ -86,37 +66,41 @@ class MarketSelector:
                 reverse=True
             )
             
-            # 필터링 및 추출
+            # 3. 필터링 및 선정 (Scam Filter + Trend Filter)
             selected_markets = []
             
-            # 고정 포함 (BTC, ETH) - 안전자산
-            must_include = {'KRW-BTC', 'KRW-ETH'}
-            for m in must_include:
-                if m in krw_tickers and m not in selected_markets:
-                    selected_markets.append(m)
-                    
+            # 고정 포함 (BTC, ETH) - 안전자산, 단 유의종목 지정 시 제외됨
+            safe_havens = {'KRW-BTC', 'KRW-ETH'}
+            
             for item in sorted_tickers:
                 market = item['market']
                 volume = item['acc_trade_price_24h']
+                warning = market_warnings.get(market, 'NONE')
                 
-                if market in selected_markets:
+                # [Filter 1] 유의 종목 절대 배제 (Scam Prevention)
+                if warning == 'CAUTION':
+                    logger.info(f"🚫 Filtering {market}: Marked as CAUTION (Investment Warning)")
                     continue
-                    
-                if len(selected_markets) >= self.top_k:
-                    break
-                    
-                # 거래대금 필터
+
+                # [Filter 2] 최소 거래대금 미달 배제 (Liquidity Check)
                 if volume < self.min_volume:
                     continue
+
+                # [Selection] 안전자산 우선 포함
+                if market in safe_havens:
+                    if market not in selected_markets:
+                        selected_markets.append(market)
+                    continue
+                
+                # [Selection] Top K 채우기
+                if len(selected_markets) < self.top_k:
+                    if market not in selected_markets:
+                        selected_markets.append(market)
                     
-                # (Optional) 너무 동전주는 제외하거나.. 일단 사용자 요청대로 급등 가능성 열어둠
-                
-                selected_markets.append(market)
-                
             self.cached_markets = selected_markets
             self.last_update = now
             
-            logger.info(f"Market Selector Updated: {selected_markets} (Min Volume: {self.min_volume/100000000:.0f}억)")
+            logger.info(f"✅ Market Selector Updated: {selected_markets} (Min Volume: {self.min_volume/100000000:.0f}억, Caution Filtered)")
             return selected_markets
             
         except Exception as e:

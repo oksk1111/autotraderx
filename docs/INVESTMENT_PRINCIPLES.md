@@ -4,36 +4,40 @@
 > **Rule No.2: Never Forget Rule No.1 (제1원칙을 절대 잊지 마라)**
 > - Warren Buffett
 
-이 문서는 위 두 가지 대원칙을 시스템에 어떻게 적용하고, 수익을 극대화하면서 리스크를 최소화하지 설명합니다.
+이 문서는 시스템의 양대 축인 **워렌 버핏의 가치 검증**과 **워뇨띠의 기계적 대응**을 기술적으로 융합한 5.0 가이드라인입니다.
 
-## 1. 핵심 철학 (Core Philosophy)
+## 1. 핵심 철학: Hybrid Strategy (5.0 Implementation)
 
-### "이기는 싸움만 한다"
-- **보수적 진입:** 확신이 없을 때는 진입하지 않는다. (High Confidence Only)
-- **빠른 손절:** 진입 판단이 틀렸다면 미련 없이 자른다. (Cut Losers Short)
-- **수익 보존:** 한 번 수익이 난 포지션은 절대 손실로 마감하지 않는다. (Let Winners Run, but Lock in Profits)
+### A. Warren Buffett Mode (건강한 자산 선정)
+*   **원칙:** "모르는 것, 위험한 것에는 손대지 않는다."
+*   **Scam Filtering (스캠 원천 차단):**
+    *   **유의 종목(Caution):** 거래소가 지정한 유의/주의 종목은 매수 대상 후보군 생성 단계에서 **즉시 탈락**시킵니다.
+    *   **유동성 검증:** 24시간 거래대금 최상위권(Top 10~20) 코인만 다룹니다. 거래량이 죽은 코인은 지표가 좋아도 매수하지 않습니다.
+    *   **건강한 추세:** 일시적 펌핑이 아닌, 꾸준한 거래량과 추세를 동반한 'Trendy'한 자산만 매수합니다.
+
+### B. Wonyyotti (aoa) Mode (기계적 리스크 관리)
+*   **원칙:** "시장은 예측의 영역이 아니라 대응의 영역이다."
+*   **상시 추세 점검 (Continuous Trend Review):**
+    *   매수 이후 '존버'는 없습니다. **모든 보유 포지션**은 매 1분마다 원점에서 재평가(Re-evaluation)됩니다.
+    *   질문: *"현금을 들고 있다면 지금 이 가격에 다시 매수하겠는가?"* 
+        *   YES (Strong Buy) -> **HOLD**
+        *   NO (Weak/Sell) -> **EXIT** (이미 손실 중이라면 즉시 손절)
+*   **칼 같은 손절 (Razor-sharp Stop Loss):**
+    *   **Hard Stop:** -4% 도달 시 어떤 기술적 지표도 무시하고 무조건 시장가 청산.
+    *   **Trailing Stop:** 수익이 나면 익절 라인을 계속 올리며 수익을 끝까지 추적하되, 반전 시 바로 확정.
 
 ## 2. 기술적 구현 (Technical Implementation)
 
-### A. Trailing Stop (추적 손절매) - *Implemented*
-수익을 극대화하면서도 하락 반전 시 이익을 지키기 위한 핵심 메커니즘입니다.
+### A. 시스템 보호 장치 (Safety Nets)
+1.  **Investment Warning Check:**
+    *   Upbit API의 `market_warning` 필드를 조회하여 'CAUTION' 상태인 코인은 매수 목록에서 제외합니다.
+2.  **Double Stop Loss Logic:**
+    *   Soft Stop: 진입가 대비 -2% (일반적 손절)
+    *   **Hard Stop:** -4% (시스템 오류나 급락 대비 절대 마지노선, 강제 청산)
+3.  **Active Trend enforcement:**
+    *   손실 중(-3% 이상)인 포지션은 추세가 '강력한 매수(Confidence > 0.7)' 상태가 아니면 매도하여 리스크를 제거합니다.
 
-*   **작동 방식:** 가격이 상승함에 따라 Stop Loss(손절가) 라인을 같이 위로 끌어올립니다.
-*   **로직:**
-    *   현재가가 진입가 대비 **+2%** 이상 상승하면 활성화됩니다.
-    *   새로운 Stop Loss = `MAX(현재가 - 2%, 본전가 + 수수료)`
-    *   가격이 계속 오르면 Stop Loss도 계속 올라가 수익을 쫓아갑니다(Trailing).
-    *   가격이 고점 대비 2% 하락하면 즉시 매도하여 수익을 확정합니다.
-*   **효과:** "어깨에서 파는" 것을 자동화하여, 급등 후 급락하는 차트에서 수익을 반납하는 것을 방지합니다.
-
-### B. Smart Risk Management (지능형 위험 관리) - *Implemented*
-*   **본전 방어 (Break Even Mode):**
-    *   수익이 조금이라도 나기 시작하면 Stop Loss를 `진입가 + 0.2%` (수수료 커버)로 이동시켜, 최악의 경우에도 수수료만 내고 원금은 지킵니다.
-*   **유동적 손절 (Dynamic Stop Loss):**
-    *   기존의 고정 -3% 손절 외에, 추세가 꺾이면 AI 판단 하에 즉시 매도합니다.
-    *   이미 손실 중인 보유 종목(-10% 등)을 봇이 인계받을 경우, 무조건 즉시 파는 것이 아니라 **'현재가 -3%'**로 손절라인을 재설정하여 반등 기회를 주되 추가 폭락은 방어합니다.
-
-### C. AI 기반 진입 필터 (AI Entry Filter)
+### B. AI 기반 진입 필터 (AI Entry Filter)
 *   **High Probability:** 머신러닝 모델의 승률 예측이 높고, LLM(Groq/Ollama)이 시장 상황을 긍정적으로 평가할 때만 진입합니다.
 
 ## 3. 운영 가이드 (Operation Guide)
@@ -43,11 +47,10 @@
 2.  **모니터링:** 봇이 설정한 Trailing Stop이 잘 따라가고 있는지 로그(`logs/`)를 통해 확인하십시오.
 
 ### 시스템 개선 로드맵
-- [x] 보유 종목 강제 분석 및 동기화 (Sync Holdings)
-- [x] Trailing Stop 로직 적용
-- [ ] 변동성 돌파 전략(VFI) 파라미터 최적화
-- [ ] 하락장 전용 숏(Short) 대용 전략 (현물 매도 후 저점 재매수)
+- [x] Market Selector에 유의종목(Caution) 필터링 추가
+- [x] 보유 종목 상시 추세 점검(Trend Review) 로직 강화
+- [x] 절대 손절 라인(Hard Stop Limit) 구현
+- [ ] 펌핑 감지(Pump Detection) 알고리즘 고도화
 
 ---
-*작성일: 2026-01-23*
-*작성자: GitHub Copilot*
+*Last Updated: 2026-01-24*

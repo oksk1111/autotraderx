@@ -63,6 +63,27 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
             
             current_price = float(current_price)
             
+            # --- [Absolute Max Loss Guard] ---
+            # 시스템 설정상의 최대 손실폭을 초과하는지 체크 (안전장치)
+            # Sync된 포지션의 Stop Loss가 너무 깊게 설정되어 있거나, 급락으로 Stop Loss를 건너뛴 경우 즉시 청산
+            pnl_pct = (current_price - pos.entry_price) / pos.entry_price
+            # 설정값의 2배를 절대 마지노선으로 설정 (예: 2% -> -4% 도달 시 무조건 매도)
+            hard_stop_limit = -(settings.stop_loss_percent * 2.0 / 100)
+            
+            if pnl_pct <= hard_stop_limit:
+                logger.warning(f"🚨 Hard Stop Limit Triggered for {pos.market}: PnL {pnl_pct:.2%} <= Limit {hard_stop_limit:.2%}")
+                decision = TradeDecisionResult(
+                    approved=True,
+                    action="SELL",
+                    market=pos.market,
+                    confidence=1.0,
+                    rationale=f"Hard Stop Limit Triggered (PnL {pnl_pct:.1%})",
+                    emergency=True,
+                    investment_ratio=1.0
+                )
+                executor.execute(db, decision)
+                continue
+
             # --- [Rule No.1: Never Lose Money] ---
             # 1. Trailing Stop (익절 보존): 가격이 상승하면 Stop Loss도 같이 위로 이동
             # 목표: 수익 상태에서 하락 반전 시 수익을 확정 짓고 나오기 위함.
@@ -145,8 +166,19 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
 
 
 async def run_cycle() -> None:
+    """
+    Main Trading Cycle
+    
+    [Philosophy v5.0] Wonyyotti x Buffett
+    1. Market Selection: Only High Volume & Healthy assets (No Scams/Caution items).
+    2. Continuous Review: All held positions are re-evaluated every cycle.
+    3. Strict Risk Management:
+       - Hard Stop at -4% (No questions asked).
+       - Soft Stop at -2% (Trailing).
+       - Trend Exit: If held asset is losing >3% and not a Strong Buy, EXIT.
+    """
     logger.info("Starting trading cycle")
-    # 동적 마켓 선정 (Top 10 거래대금)
+    # 동적 마켓 선정 (Top 10 거래대금, Caution 제외)
     markets = market_selector.get_top_volume_coins()
     
     # [Improvement] 보유 중인 코인도 분석 대상에 포함
@@ -315,6 +347,30 @@ async def run_cycle() -> None:
                     # Enhanced Engine으로 거래 신호 생성 (Hybrid + MultiTF)
                     action, confidence, details = enhanced_engine.get_enhanced_signal(market, df, multi_tf_data=multi_tf_dfs)
                     
+                    # [Trend Review] 보유 종목에 대한 추세 재점검
+                    # 만약 보유 중인데 손실이 크고(-3% 이상), 추세가 강력한 상승(BUY + High Confidence)이 아니라면 매도 검토
+                    current_pos = db.query(TradePosition).filter(
+                        TradePosition.market == market,
+                        TradePosition.status == "OPEN"
+                    ).first()
+
+                    # HOLD 상태거나, BUY 신호라도 신뢰도가 낮다면(0.7 미만) 손실 관리 모드 작동
+                    if current_pos and (action == "HOLD" or (action == "BUY" and confidence < 0.7)):
+                        try:
+                            current_price = df.iloc[-1]['close']
+                            entry_price = current_pos.entry_price
+                            if entry_price > 0:
+                                pnl_pct = (current_price - entry_price) / entry_price
+                                
+                                # 3% 이상 손실 중인데 확실한 상승 추세가 아니라면 매도하여 리스크 관리
+                                if pnl_pct < -0.03:
+                                    logger.info(f"📉 Trend Review: {market} PnL {pnl_pct:.2%} & Signal is {action}({confidence:.2f}). Forcing Exit.")
+                                    action = "SELL"
+                                    confidence = 0.95  # 강제 매도 실행을 위해 높은 신뢰도 부여
+                                    details['rationale'] = f"Trend Review: Deep Loss ({pnl_pct:.1%}) without strong uptrend. Cutting Loss."
+                        except Exception as e:
+                            logger.error(f"Error reviewing trend for held position {market}: {e}")
+
                     if action != "HOLD":
                         # v5.0: 신뢰도 기반 투자 비율 상향 (더 공격적)
                         if confidence >= 0.90:
