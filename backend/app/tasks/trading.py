@@ -128,39 +128,118 @@ async def run_cycle() -> None:
     logger.info("Starting trading cycle")
     # 동적 마켓 선정 (Top 10 거래대금)
     markets = market_selector.get_top_volume_coins()
-    logger.info(f"Selected Markets: {markets}")
+    
+    # [Improvement] 보유 중인 코인도 분석 대상에 포함
+    try:
+        upbit = pyupbit.Upbit(settings.upbit_access_key, settings.upbit_secret_key)
+        balances = upbit.get_balances()
+        
+        held_tickers = []
+        for b in balances:
+            if b['currency'] == 'KRW': continue
+            ticker = f"KRW-{b['currency']}"
+            held_tickers.append(ticker)
+            
+            if ticker not in markets:
+                markets.append(ticker)
+                logger.info(f"➕ Adding held coin to analysis target: {ticker}")
+                
+    except Exception as e:
+        logger.error(f"Failed to fetch balances for market Sync: {e}")
+        # 계속 진행 (기본 markets 만으로)
+
+    logger.info(f"Selected Markets (including holdings): {markets}")
     
     data_service = HistoricalDataService(markets)
     
     # 시장별 멀티 타임프레임 데이터 가져오기 (1h, 15m, 5m)
     multi_tf_data_dict = await data_service.fetch_multi_timeframe()
 
-    # Upbit 계정 정보 가져오기
+    # Upbit 계정 정보 및 자산 계산
     try:
-        upbit = pyupbit.Upbit(settings.upbit_access_key, settings.upbit_secret_key)
-        balances = upbit.get_balances()
-        krw_balance = float(upbit.get_balance("KRW") or 0)
+        # balances는 위에서 이미 가져왔으나, KRW 잔고 등 정확한 계산을 위해 재사용
+        krw_balance = 0.0
+        for b in balances:
+            if b['currency'] == 'KRW':
+                krw_balance = float(b['balance'])
+                break
         
         # 원금과 현재 자산 계산
         total_value = krw_balance
-        for balance in balances:
-            if balance['currency'] != 'KRW':
-                ticker = f"KRW-{balance['currency']}"
-                current_price = pyupbit.get_current_price(ticker)
-                if current_price and isinstance(current_price, (int, float)):
-                    total_value += float(balance['balance']) * float(current_price)
         
+        # DB 세션 미리 생성
+        db: Session = SessionLocal()
+        
+        # 현재가 조회 (보유 코인 가치 계산 및 포지션 동기화용)
+        if held_tickers:
+            current_prices = pyupbit.get_current_price(held_tickers)
+            if isinstance(current_prices, (float, int)):
+                current_prices = {held_tickers[0]: current_prices}
+            elif current_prices is None:
+                current_prices = {}
+        else:
+            current_prices = {}
+
+        for b in balances:
+            if b['currency'] != 'KRW':
+                ticker = f"KRW-{b['currency']}"
+                price = float(current_prices.get(ticker, 0))
+                balance_val = float(b['balance']) * price
+                total_value += balance_val
+                
+                # [Sync] DB에 없는 포지션이면 생성 (수동 매수 등)
+                # 평가금액 5000원 이상만
+                if balance_val > 5000:
+                    existing_pos = db.query(TradePosition).filter(
+                        TradePosition.market == ticker, 
+                        TradePosition.status == "OPEN"
+                    ).first()
+                    
+                    if not existing_pos:
+                        avg_buy_price = float(b['avg_buy_price'])
+                        # 이미 손실 상태일 수 있으므로, 현재가 기준의 Stop Loss 설정보다는
+                        # '평단가' 기준의 Stop Loss를 설정하되, 이미 지났다면 다음 로직(ML)에 맡김
+                        # 단, 여기서는 시스템 관리를 위해 등록함.
+                        
+                        # 안전장치: 현재가가 평단가보다 훨씬 낮으면(-10%), Stop Loss를 현재가 -3%로 설정하여
+                        # 추가 하락 시 방어하도록 함 (Trailing Stop 개념 적용)
+                        
+                        if price < avg_buy_price * 0.9: # 이미 10% 이상 손실 중
+                            stop_loss = price * 0.97 # 현재가 기준 3% 
+                            logger.info(f"⚠️ Deep loss detected for {ticker}. Setting Stop Loss to current price -3%")
+                        else:
+                            stop_loss = avg_buy_price * (1 - settings.stop_loss_percent / 100)
+
+                        take_profit = avg_buy_price * (1 + settings.take_profit_percent / 100)
+                        
+                        new_pos = TradePosition(
+                            market=ticker,
+                            size=float(b['balance']),
+                            entry_price=avg_buy_price,
+                            stop_loss=stop_loss,
+                            take_profit=take_profit,
+                            status="OPEN"
+                        )
+                        db.add(new_pos)
+                        db.commit()
+                        logger.info(f"🔄 Synced external position to DB: {ticker} (Avg: {avg_buy_price:,.0f})")
+        
+        # 임시 세션 종료
+        db.close()
+
         account_info = {
-            "principal": total_value,  # 총 자산을 원금으로 사용
-            "available_balance": krw_balance,  # 가용 KRW
-            "open_positions": len([b for b in balances if b['currency'] != 'KRW']),
-            "avg_return": 0.0,  # 계산 필요
-            "consecutive_losses": 0,  # 계산 필요
+            "principal": total_value,  
+            "available_balance": krw_balance,  
+            "open_positions": len(held_tickers),
+            "avg_return": 0.0, 
+            "consecutive_losses": 0, 
         }
         logger.info(f"Account Info: Total={total_value:,.0f} KRW, Available={krw_balance:,.0f} KRW, Positions={account_info['open_positions']}")
         
     except Exception as e:
-        logger.error(f"Failed to get account info: {e}")
+        logger.error(f"Failed to process account info: {e}")
+        # db 세션 닫기
+        if 'db' in locals(): db.close()
         return
 
     engine = TradingEngine(settings)
