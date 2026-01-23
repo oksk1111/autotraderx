@@ -25,13 +25,13 @@ class HybridTradingEngine:
         """
         self.ml_predictor = ml_predictor
         
-        # 기술적 지표 임계값
+        # 기술적 지표 임계값 (v5.0 조정: 더 민감하게)
         self.thresholds = {
-            'rsi_oversold': 35,      # RSI 과매도 (기존 30 -> 35 완화)
-            'rsi_overbought': 65,    # RSI 과매수 (기존 70 -> 65 완화)
-            'volume_surge': 1.5,     # 거래량 급등 (기존 2.0 -> 1.5 완화)
-            'bb_lower': 0.2,         # 볼린저 하단 (0~1)
-            'bb_upper': 0.8,         # 볼린저 상단
+            'rsi_oversold': 40,      # RSI 과매도 (35 -> 40 완화: 더 빨리 진입)
+            'rsi_overbought': 60,    # RSI 과매수 (65 -> 60: 더 빨리 익절)
+            'volume_surge': 1.3,     # 거래량 급등 (1.5 -> 1.3: 더 민감하게)
+            'bb_lower': 0.25,        # 볼린저 하단 (0.2 -> 0.25: 좀 더 관대)
+            'bb_upper': 0.75,        # 볼린저 상단 (0.8 -> 0.75: 더 빨리 경고)
             'macd_threshold': 0.0,   # MACD 골든크로스
         }
         

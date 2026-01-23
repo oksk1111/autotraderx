@@ -78,12 +78,17 @@ class Settings(BaseSettings):
     tick_min_confidence: float = 0.6  # tick 매매 최소 신뢰도 (기본값: 60%, v4.0 조정)
     tick_max_positions: int = 5  # tick 매매 최대 동시 포지션 수
 
-    # 펌핑 감지 (Pump Detection) 설정 [v4.1]
+    # 펌핑 감지 (Pump Detection) 설정 [v5.0 업그레이드]
     pump_detection_enabled: bool = True
-    pump_threshold_percent: float = 1.5  # 1.5% 이상 급등 시 감지
-    pump_check_interval: float = 2.0  # 2초마다 체크
-    pump_lookback_seconds: int = 60  # 최근 60초 기준 상승률
-    pump_investment_ratio: float = 0.2  # 펌핑 감지 시 자산의 20% 투입
+    pump_threshold_percent: float = 0.8   # 0.8% 상승 시 조짐 감지 (기존 1.5%→0.8%)
+    pump_check_interval: float = 1.0      # 1초마다 체크 (기존 2초→1초)
+    pump_lookback_seconds: int = 30       # 최근 30초 기준 (기존 60초→30초)
+    pump_investment_ratio: float = 0.30   # 펌핑 감지 시 30% 투입 (기존 20%→30%)
+    
+    # v5.0 신규: 피크 감지 및 트레일링 스탑 설정
+    trailing_stop_enabled: bool = True
+    trailing_stop_pct: float = 0.015      # 고점 대비 1.5% 하락 시 매도
+    peak_rsi_threshold: float = 78.0      # RSI 78 이상에서 하락 시 피크 감지
 
     tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL"]
 

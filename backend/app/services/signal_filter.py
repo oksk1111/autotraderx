@@ -88,16 +88,18 @@ class SignalFilter:
     
     def should_allow_trade(self, market: str, current_signal: str, confidence: float = 0.0) -> tuple[bool, str]:
         """
-        거래 허용 여부 판단
+        거래 허용 여부 판단 (v5.0 완화)
         
-        기본적으로 연속 신호는 차단하지만, 신뢰도가 매우 높으면 허용합니다.
-        단, 이미 고신뢰도(≥80%)로 거래했다면 추가 연속 신호는 차단합니다.
+        v5.0 변경사항:
+        - 연속 신호 허용 임계값 80% → 70%로 완화
+        - 급등장에서 더 많은 기회 포착
+        - BUY 연속 신호는 더 관대하게 처리
         
         규칙:
         1. 신호 반전 (BUY ↔ SELL): 항상 허용
-        2. 연속 신호 + 이전 거래 신뢰도 < 80%: 현재 신뢰도 ≥ 80%면 허용
-        3. 연속 신호 + 이전 거래 신뢰도 ≥ 80%: 차단 (이미 고신뢰도로 매매함)
-        4. 연속 신호 + 현재 신뢰도 < 80%: 차단
+        2. 연속 BUY + 신뢰도 ≥ 70%: 허용 (급등장 대응)
+        3. 연속 SELL + 신뢰도 ≥ 75%: 허용
+        4. 이미 90% 이상으로 거래했다면: 차단 (최고점 매수 방지)
         
         Args:
             market: 시장 코드 (예: KRW-BTC)
@@ -126,19 +128,26 @@ class SignalFilter:
         # 여기서부터는 연속 동일 신호 처리
         last_confidence = self.get_last_confidence(market)
         
-        # 이미 고신뢰도(≥80%)로 거래했다면 추가 연속 신호 차단
-        if last_confidence >= 0.80:
-            logger.info(f"🔴 {market}: 연속 {current_signal} 신호 차단 (이전 거래 이미 고신뢰도: {last_confidence:.1%}, 현재: {confidence:.1%})")
-            return False, f"고신뢰도 거래 후 연속 신호 (이전: {last_confidence:.1%})"
+        # v5.0: 이미 매우 고신뢰도(≥90%)로 거래했다면 차단 (최고점 매수 방지)
+        if last_confidence >= 0.90:
+            logger.info(f"🔴 {market}: 연속 {current_signal} 신호 차단 (이전 거래 이미 최고신뢰도: {last_confidence:.1%})")
+            return False, f"최고신뢰도 거래 후 연속 신호 (이전: {last_confidence:.1%})"
         
-        # 이전 거래가 저신뢰도였고, 현재 신뢰도가 높으면 허용
-        if confidence >= 0.80:
-            logger.info(f"🟡 {market}: 연속 {current_signal} 신호지만 높은 신뢰도({confidence:.1%})로 거래 허용 (이전: {last_confidence:.1%})")
-            return True, f"고신뢰도 연속 {current_signal} (이전: {last_confidence:.1%} → 현재: {confidence:.1%})"
+        # v5.0: BUY 연속 신호는 더 관대하게 처리 (급등장 대응)
+        if current_signal == "BUY":
+            if confidence >= 0.70:  # 80% → 70%로 완화
+                logger.info(f"🟡 {market}: 연속 BUY 신호 허용 (급등장 대응, 신뢰도: {confidence:.1%})")
+                return True, f"급등장 연속 BUY (신뢰도: {confidence:.1%})"
+        
+        # SELL 연속 신호는 75% 이상이면 허용
+        if current_signal == "SELL":
+            if confidence >= 0.75:
+                logger.info(f"🟡 {market}: 연속 SELL 신호 허용 (하락 방어, 신뢰도: {confidence:.1%})")
+                return True, f"하락 방어 연속 SELL (신뢰도: {confidence:.1%})"
         
         # 연속 신호 + 낮은 신뢰도 - 차단
-        logger.info(f"🔴 {market}: 연속 {current_signal} 신호 차단 (현재 신뢰도: {confidence:.1%}, 이전: {last_confidence:.1%})")
-        return False, f"연속 {current_signal} 신호 (필터링됨)"
+        logger.info(f"🔴 {market}: 연속 {current_signal} 신호 차단 (현재 신뢰도: {confidence:.1%} < 필요 70%)")
+        return False, f"연속 {current_signal} 신호 (신뢰도 부족)"
     
     def reset_signal(self, market: str) -> None:
         """

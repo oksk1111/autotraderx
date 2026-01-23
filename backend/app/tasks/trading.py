@@ -217,15 +217,17 @@ async def run_cycle() -> None:
                     action, confidence, details = enhanced_engine.get_enhanced_signal(market, df, multi_tf_data=multi_tf_dfs)
                     
                     if action != "HOLD":
-                        # 신뢰도 기반 투자 비율 설정 (리스크 관리 강화: 최대 20%로 제한)
-                        if confidence >= 0.85:
-                            investment_ratio = 0.20  # 기존 0.5 -> 0.2
+                        # v5.0: 신뢰도 기반 투자 비율 상향 (더 공격적)
+                        if confidence >= 0.90:
+                            investment_ratio = 0.40  # 최고 신뢰도: 40%
+                        elif confidence >= 0.85:
+                            investment_ratio = 0.30  # 기존 0.20 -> 0.30
                         elif confidence >= 0.75:
-                            investment_ratio = 0.15  # 기존 0.3 -> 0.15
+                            investment_ratio = 0.25  # 기존 0.15 -> 0.25
                         elif confidence >= 0.65:
-                            investment_ratio = 0.10  # 기존 0.2 -> 0.1
+                            investment_ratio = 0.15  # 기존 0.10 -> 0.15
                         else:
-                            investment_ratio = 0.05  # 기존 0.1 -> 0.05
+                            investment_ratio = 0.10  # 기존 0.05 -> 0.10
                         
                         # SELL은 전량 매도
                         if action == "SELL":
@@ -238,31 +240,40 @@ async def run_cycle() -> None:
                         current_price = df.iloc[-1].get('close', 0)
                         
                         if atr > 0 and current_price > 0:
-                            # ATR 배수 기반 SL/TP (변동성 적응형)
-                            # SL: 1.5 ATR, TP: 2.5 ATR (손익비 1:1.67)
+                            # v5.0: ATR 배수 기반 SL/TP (변동성 적응형)
+                            # SL: 1.5 ATR, TP: 3.0 ATR (손익비 1:2)
                             atr_sl_multiplier = 1.5
-                            atr_tp_multiplier = 2.5
+                            atr_tp_multiplier = 3.0  # 기존 2.5 -> 3.0 (급등 대응)
                             
-                            # 고신뢰도일수록 더 넓은 TP 허용
-                            if confidence >= 0.8:
-                                atr_tp_multiplier = 3.0  # 손익비 1:2
+                            # 고신뢰도일수록 더 넓은 TP 허용 (v5.0 강화)
+                            if confidence >= 0.9:
+                                atr_tp_multiplier = 4.0  # 손익비 1:3 (급등장 최대화)
+                                atr_sl_multiplier = 1.0  # 타이트한 SL
+                            elif confidence >= 0.8:
+                                atr_tp_multiplier = 3.5  # 손익비 1:2.5
                                 atr_sl_multiplier = 1.2  # 타이트한 SL
                             
                             # ATR 기반 퍼센티지
-                            stop_loss_pct = min((atr * atr_sl_multiplier / current_price), 0.05)  # 최대 5%
-                            take_profit_pct = min((atr * atr_tp_multiplier / current_price), 0.10)  # 최대 10%
+                            stop_loss_pct = min((atr * atr_sl_multiplier / current_price), 0.04)  # 최대 4% (기존 5%)
+                            take_profit_pct = min((atr * atr_tp_multiplier / current_price), 0.15)  # 최대 15% (기존 10%)
                             
-                            # 최소값 보장
-                            stop_loss_pct = max(stop_loss_pct, 0.015)  # 최소 1.5%
-                            take_profit_pct = max(take_profit_pct, 0.025)  # 최소 2.5%
+                            # 최소값 보장 (v5.0 조정)
+                            stop_loss_pct = max(stop_loss_pct, 0.012)  # 최소 1.2% (기존 1.5%)
+                            take_profit_pct = max(take_profit_pct, 0.03)  # 최소 3% (기존 2.5%)
                         else:
-                            # ATR 없을 경우 기본값 사용
-                            stop_loss_pct = 0.025
-                            take_profit_pct = 0.040
-                            
-                            if confidence >= 0.8:
-                                stop_loss_pct = 0.020
-                                take_profit_pct = 0.060
+                            # ATR 없을 경우 신뢰도 기반 동적 기본값 (v5.0)
+                            if confidence >= 0.9:
+                                stop_loss_pct = 0.015
+                                take_profit_pct = 0.08  # 8% TP
+                            elif confidence >= 0.8:
+                                stop_loss_pct = 0.02
+                                take_profit_pct = 0.06  # 6% TP
+                            elif confidence >= 0.7:
+                                stop_loss_pct = 0.02
+                                take_profit_pct = 0.05  # 5% TP
+                            else:
+                                stop_loss_pct = 0.025
+                                take_profit_pct = 0.04  # 4% TP
                         
                         # TradeDecisionResult 생성
                         from app.trading.engine import TradeDecisionResult
@@ -499,16 +510,22 @@ async def run_tick_cycle() -> None:
 
 async def run_pump_detection_loop() -> None:
     """
-    실시간 모니터링 루프 (WebSocket 기반, 1분간 지속 실행)
-    Mode 1: Momentum Strategy (Pump buy)
+    실시간 모니터링 루프 (WebSocket 기반, 1분간 지속 실행) v5.0
+    
+    v5.0 업그레이드:
+    - PumpPredictor: 급등 조짐 사전 감지 + 피크 매도
+    - 트레일링 스탑: 수익 극대화
+    
+    Mode 1: Momentum Strategy (Pump buy) -> PumpPredictor 사용
     Mode 2: Reversal Strategy (Peak sell, Dip buy)
-    Mode 3: Breakout Strategy (Trend Following) - **DEFAULT (v4.1)**
+    Mode 3: Breakout Strategy (Trend Following) - **DEFAULT**
     """
     if not settings.pump_detection_enabled:
         return
 
     import time
-    from app.trading.pump_detector import PumpDetector
+    from app.trading.pump_predictor import PumpPredictor  # v5.0: 신규 예측기
+    from app.trading.pump_detector import PumpDetector  # 레거시 호환
     from app.trading.reversal_strategy import ReversalTradingStrategy
     from app.trading.engine import TradeDecisionResult
     from app.models.trading import AutoTradingConfig
@@ -530,17 +547,19 @@ async def run_pump_detection_loop() -> None:
         logger.error(f"Failed to load strategy config: {e}")
         strategy_mode = "breakout_strategy"
 
-    logger.info(f"🚀 Starting Real-time Monitoring Loop: Mode={strategy_mode} (55s)")
+    logger.info(f"🚀 Starting Real-time Monitoring Loop v5.0: Mode={strategy_mode} (55s)")
     
-    detector = None
+    # v5.0: PumpPredictor 사용 (급등 조짐 + 피크 감지)
+    pump_predictor = PumpPredictor()
+    detector = None  # 레거시
     reversal_strategy = None
-    # markets = settings.tracked_markets # OLD
+    
     # 동적 마켓 사용
     markets = market_selector.get_top_volume_coins()
     
     # 전략 초기화
     if strategy_mode == "momentum_strategy":
-        detector = PumpDetector()
+        detector = PumpDetector()  # 레거시 호환
     elif strategy_mode == "reversal_strategy":
         reversal_strategy = ReversalTradingStrategy(settings)
     # BreakoutStrategy는 전역 인스턴스 사용
@@ -593,38 +612,94 @@ async def run_pump_detection_loop() -> None:
             price = float(data.get('trade_price'))
             volume = float(data.get('acc_trade_price_24h'))
             
-            # --- [A] 공통: 실시간 Stop Loss / Take Profit (기존 로직 유지) ---
+            # --- [A] v5.0 개선: 실시간 트레일링 스탑 + SL/TP ---
             if market in monitored_positions:
                 pos = monitored_positions[market]
+                
+                # 1. 기존 Stop Loss
                 if price <= pos.stop_loss:
                     logger.warning(f"🛑 Real-time Stop Loss: {market} {price}")
                     decision = TradeDecisionResult(True, "SELL", market, 1.0, "Real-time Stop Loss", True, 1.0)
                     executor.execute(db, decision)
+                    pump_predictor.clear_position(market)  # v5.0: 포지션 추적 초기화
                     del monitored_positions[market]
                     continue
+                    
+                # 2. 기존 Take Profit
                 elif price >= pos.take_profit:
                     logger.info(f"💰 Real-time Take Profit: {market} {price}")
                     decision = TradeDecisionResult(True, "SELL", market, 1.0, "Real-time Take Profit", False, 1.0)
                     executor.execute(db, decision)
+                    pump_predictor.clear_position(market)  # v5.0: 포지션 추적 초기화
+                    del monitored_positions[market]
+                    continue
+                
+                # 3. v5.0 신규: 트레일링 스탑 + 피크 감지
+                df = cached_dfs.get(market)
+                peak_signal = pump_predictor.detect_peak(
+                    market, price, pos.entry_price, volume,
+                    rsi=df.iloc[-1].get('rsi', 50) if df is not None and len(df) > 0 else None
+                )
+                if peak_signal and peak_signal.action == "SELL":
+                    logger.info(f"🔔 Peak Detected: {market} - {peak_signal.reason}")
+                    decision = TradeDecisionResult(
+                        True, "SELL", market, peak_signal.confidence,
+                        f"Peak Sell: {peak_signal.reason}", False, 1.0
+                    )
+                    executor.execute(db, decision)
+                    pump_predictor.clear_position(market)
                     del monitored_positions[market]
                     continue
 
             # --- [B] 전략별 진입/청산 로직 ---
             
-            # Option 1: Momentum (Pump)
-            if strategy_mode == "momentum_strategy" and detector:
-                # v4.1: 거래대금 필터 추가된 PumpDetector 사용
-                is_pump, change_pct = detector.check_pump(market, price, current_volume_24h=volume)
-                if is_pump:
-                    logger.warning(f"🚨 PUMP ALERT: {market} +{change_pct:.2f}%")
-                    if market in monitored_positions: continue
-                    
-                    decision = TradeDecisionResult(
-                        True, "BUY", market, 0.95, 
-                        f"Pump +{change_pct:.2f}%", False, 
-                        settings.pump_investment_ratio
-                    )
-                    executor.execute(db, decision, None)
+            # Option 1: Momentum (Pump) - v5.0 개선
+            if strategy_mode == "momentum_strategy":
+                df = cached_dfs.get(market)
+                if df is None:
+                    continue
+                
+                # v5.0: PumpPredictor로 급등 조짐 사전 감지
+                has_position = market in monitored_positions
+                entry_price = monitored_positions[market].entry_price if has_position else 0
+                
+                signal = pump_predictor.analyze(
+                    market, df, price, volume,
+                    has_position=has_position,
+                    entry_price=entry_price
+                )
+                
+                if signal.action == "BUY" and signal.signal_type == "PRE_PUMP":
+                    if market not in monitored_positions:
+                        logger.warning(f"🚀 PRE-PUMP 감지: {market} - {signal.reason}")
+                        
+                        existing = db.query(TradePosition).filter(
+                            TradePosition.market==market, 
+                            TradePosition.status=="OPEN"
+                        ).first()
+                        if existing:
+                            monitored_positions[market] = existing
+                            continue
+                        
+                        decision = TradeDecisionResult(
+                            True, "BUY", market, signal.confidence, 
+                            f"Pre-Pump: {signal.reason}", False, 
+                            settings.pump_investment_ratio,
+                            max_loss_acceptable=0.02,  # 타이트한 SL
+                            take_profit_target=0.08    # 8% 목표 (급등 기대)
+                        )
+                        executor.execute(db, decision, None)
+                        
+                elif signal.action == "SELL" and signal.signal_type == "PEAK":
+                    if market in monitored_positions:
+                        logger.info(f"🔔 PEAK 매도: {market} - {signal.reason}")
+                        decision = TradeDecisionResult(
+                            True, "SELL", market, signal.confidence, 
+                            f"Peak Detected: {signal.reason}", False, 1.0
+                        )
+                        executor.execute(db, decision)
+                        pump_predictor.clear_position(market)
+                        del monitored_positions[market]
 
             # Option 2: Reversal (Peak Sell, Dip Buy)
             elif strategy_mode == "reversal_strategy" and reversal_strategy:
