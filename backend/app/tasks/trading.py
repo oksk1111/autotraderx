@@ -63,6 +63,26 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
             
             current_price = float(current_price)
             
+            # --- [Rule No.1: Never Lose Money] ---
+            # 1. Trailing Stop (익절 보존): 가격이 상승하면 Stop Loss도 같이 위로 이동
+            # 목표: 수익 상태에서 하락 반전 시 수익을 확정 짓고 나오기 위함.
+            
+            # (1) 수익 구간 진입 시 (예: +1.5% 이상), 최소한 본전(수수료 포함)은 건지도록 Stop Loss 상향
+            break_even_price = pos.entry_price * 1.002 # 수수료 고려 0.2%
+            if current_price > pos.entry_price * 1.015: 
+                # 현재가가 진입가 대비 1.5% 이상 상승했다면 본전 방어 모드 발동
+                
+                # 새 스톱로스는 '현재가 - 2%' 또는 '본절가' 중 큰 값
+                # 상승폭이 클수록(예: 10% 수익), '현재가 - 2%'가 본절가보다 훨씬 높으므로 이익 실현선이 됨.
+                # 막 진입한 초기 수익구간(1.5%)에서는 '본절가'가 선택되어 원금 방어.
+                trailing_stop_price = max(current_price * 0.98, break_even_price)
+                
+                if trailing_stop_price > pos.stop_loss:
+                    old_sl = pos.stop_loss
+                    pos.stop_loss = trailing_stop_price
+                    db.commit()
+                    logger.info(f"📈 Trailing Stop Updated for {pos.market}: {old_sl:,.0f} -> {pos.stop_loss:,.0f} (Price: {current_price:,.0f})")
+
             # Stop Loss 체크
             if current_price <= pos.stop_loss:
                 logger.warning(f"🛑 Stop Loss Triggered for {pos.market}: Current {current_price:,.0f} <= Stop {pos.stop_loss:,.0f}")
