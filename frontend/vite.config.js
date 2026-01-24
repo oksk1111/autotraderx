@@ -6,14 +6,14 @@ export default defineConfig({
   server: {
     port: 4173,
     proxy: {
-      "/api": "http://backend:8000"
+      "/api": "http://localhost:8000"
     }
   },
   preview: {
     port: 4173,
     proxy: {
       "/api": {
-        target: "http://backend:8000",
+        target: "http://localhost:8000",
         changeOrigin: true,
         secure: false,
       },
