@@ -31,6 +31,11 @@ breakout_strategy = BreakoutTradingStrategy()
 def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
     """
     오픈 포지션의 Stop Loss / Take Profit 체크 및 실행
+    
+    v5.1 업그레이드:
+    - 즉시 손절: -3% 이상 손실 시 무조건 청산 (추세 무관)
+    - Hard Stop: -4% 절대 마지노선 유지
+    - Rule No.1: 돈을 잃지 마라
     """
     from app.trading.engine import TradeDecisionResult
     
@@ -63,12 +68,28 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
             
             current_price = float(current_price)
             
-            # --- [Absolute Max Loss Guard] ---
-            # 시스템 설정상의 최대 손실폭을 초과하는지 체크 (안전장치)
-            # Sync된 포지션의 Stop Loss가 너무 깊게 설정되어 있거나, 급락으로 Stop Loss를 건너뛴 경우 즉시 청산
+            # [v5.1 핵심] PnL 계산
             pnl_pct = (current_price - pos.entry_price) / pos.entry_price
-            # 설정값의 2배를 절대 마지노선으로 설정 (예: 2% -> -4% 도달 시 무조건 매도)
-            hard_stop_limit = -(settings.stop_loss_percent * 2.0 / 100)
+            
+            # --- [Rule No.1: 돈을 잃지 마라] ---
+            # 1. 즉시 손절: -3% 이상 손실 시 무조건 청산 (추세나 신호 무관)
+            #    "이미 3% 잃었으면 더 이상 기다리지 않는다"
+            if pnl_pct <= -0.03:
+                logger.warning(f"🚨 IMMEDIATE LOSS CUT for {pos.market}: PnL {pnl_pct:.2%} <= -3%")
+                decision = TradeDecisionResult(
+                    approved=True,
+                    action="SELL",
+                    market=pos.market,
+                    confidence=1.0,
+                    rationale=f"Rule No.1: Immediate Loss Cut at {pnl_pct:.1%}",
+                    emergency=True,
+                    investment_ratio=1.0
+                )
+                executor.execute(db, decision)
+                continue
+            
+            # 2. Hard Stop Limit: -4% 절대 마지노선 (기존 로직 유지, 이중 안전장치)
+            hard_stop_limit = -0.04
             
             if pnl_pct <= hard_stop_limit:
                 logger.warning(f"🚨 Hard Stop Limit Triggered for {pos.market}: PnL {pnl_pct:.2%} <= Limit {hard_stop_limit:.2%}")
@@ -83,6 +104,17 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
                 )
                 executor.execute(db, decision)
                 continue
+            
+            # 3. 소폭 손실 시 (-1.5% ~ -3%) 추세 확인 후 청산 고려
+            #    단, 추세 확인 없이 일단 Stop Loss만 타이트하게 조정
+            if pnl_pct <= -0.015 and pnl_pct > -0.03:
+                # Stop Loss를 현재가 -1%로 타이트하게 조정 (기존보다 더 빡빡하게)
+                tight_stop = current_price * 0.99
+                if tight_stop > pos.stop_loss:
+                    old_sl = pos.stop_loss
+                    pos.stop_loss = tight_stop
+                    db.commit()
+                    logger.info(f"⚠️ Tightening SL for {pos.market} (PnL {pnl_pct:.1%}): {old_sl:,.0f} -> {tight_stop:,.0f}")
 
             # --- [Rule No.1: Never Lose Money] ---
             # 1. Trailing Stop (익절 보존): 가격이 상승하면 Stop Loss도 같이 위로 이동
@@ -249,18 +281,25 @@ async def run_cycle() -> None:
                     
                     if not existing_pos:
                         avg_buy_price = float(b['avg_buy_price'])
-                        # 이미 손실 상태일 수 있으므로, 현재가 기준의 Stop Loss 설정보다는
-                        # '평단가' 기준의 Stop Loss를 설정하되, 이미 지났다면 다음 로직(ML)에 맡김
-                        # 단, 여기서는 시스템 관리를 위해 등록함.
+                        pnl_pct = (price - avg_buy_price) / avg_buy_price if avg_buy_price > 0 else 0
                         
-                        # 안전장치: 현재가가 평단가보다 훨씬 낮으면(-10%), Stop Loss를 현재가 -3%로 설정하여
-                        # 추가 하락 시 방어하도록 함 (Trailing Stop 개념 적용)
+                        # [v5.1 개선] 손실 포지션 Sync 시 더 엄격한 Stop Loss 설정
+                        # Rule No.1: 돈을 잃지 마라 - 이미 손실 중이면 더 이상 방치하지 않음
                         
-                        if price < avg_buy_price * 0.9: # 이미 10% 이상 손실 중
-                            stop_loss = price * 0.97 # 현재가 기준 3% 
-                            logger.info(f"⚠️ Deep loss detected for {ticker}. Setting Stop Loss to current price -3%")
-                        else:
-                            stop_loss = avg_buy_price * (1 - settings.stop_loss_percent / 100)
+                        if pnl_pct <= -0.03:  # 이미 3% 이상 손실 중
+                            # 즉시 청산 대상으로 마킹 (stop_loss를 현재가 위로 설정)
+                            stop_loss = price * 1.001  # 현재가 바로 위 = 다음 체크에서 즉시 청산
+                            logger.warning(f"🚨 CRITICAL: {ticker} already at {pnl_pct:.1%} loss! Marking for immediate sale")
+                        elif pnl_pct <= -0.015:  # 1.5% ~ 3% 손실 중
+                            stop_loss = price * 0.99  # 현재가 -1%로 타이트하게
+                            logger.warning(f"⚠️ Moderate loss detected for {ticker} ({pnl_pct:.1%}). Tight SL at current -1%")
+                        elif pnl_pct < 0:  # 0% ~ 1.5% 손실 중
+                            stop_loss = avg_buy_price * 0.98  # 평단가 -2%
+                            logger.info(f"⚠️ Small loss for {ticker} ({pnl_pct:.1%}). SL at avg -2%")
+                        else:  # 수익 중
+                            # 수익 중이면 최소한 본전은 지키도록
+                            stop_loss = max(avg_buy_price * 0.99, avg_buy_price * (1 - settings.stop_loss_percent / 100))
+                            logger.info(f"✅ Profit position {ticker} ({pnl_pct:.1%}). Protecting gains")
 
                         take_profit = avg_buy_price * (1 + settings.take_profit_percent / 100)
                         
