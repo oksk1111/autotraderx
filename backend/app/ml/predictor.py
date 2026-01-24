@@ -8,6 +8,11 @@ from typing import Dict, Union
 import lightgbm as lgb
 import numpy as np
 
+from app.core.config import Settings, get_settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 try:
     import torch
     import torch.nn as nn
@@ -19,11 +24,6 @@ except ImportError:
     class MockModule:
         pass
     nn = type('obj', (object,), {'Module': MockModule, 'LSTM': MockModule, 'Dropout': MockModule, 'Linear': MockModule, 'ReLU': MockModule})
-
-from app.core.config import Settings, get_settings
-from app.core.logging import get_logger
-
-logger = get_logger(__name__)
 
 
 @dataclass
