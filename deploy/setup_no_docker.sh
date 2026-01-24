@@ -12,7 +12,7 @@ sudo apt update && sudo apt upgrade -y
 
 # 2. 필수 패키지 설치
 echo ">>> 필수 패키지 설치..."
-sudo apt install -y python3.11 python3.11-venv python3-pip \
+sudo apt install -y python3 python3-venv python3-pip \
     postgresql postgresql-contrib redis-server \
     git curl build-essential libpq-dev
 
@@ -56,7 +56,7 @@ fi
 # 7. Backend 가상환경 및 의존성 설치
 echo ">>> Backend 설정..."
 cd "$PROJECT_DIR/backend"
-python3.11 -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
