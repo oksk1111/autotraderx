@@ -47,36 +47,48 @@ jobs:
             echo "Deploying branch: $BRANCH"
             git reset --hard origin/$BRANCH
 
-            # 3. Docker Compose 실행 (v2 또는 v1 감지)
-            DOCKER_CMD="docker"
-            if ! groups | grep -q "docker"; then
-               DOCKER_CMD="sudo docker"
-            fi
-            
-            # docker compose (v2) vs docker-compose (v1) 확인
-            if $DOCKER_CMD compose version >/dev/null 2>&1; then
-               COMPOSE_CMD="$DOCKER_CMD compose"
-            elif command -v docker-compose >/dev/null 2>&1; then
-               # docker-compose는 보통 sudo 없이 실행하거나 별도 권한 필요
-               # 여기서는 sudo로 통일 시도
-               if ! groups | grep -q "docker"; then
-                   COMPOSE_CMD="sudo docker-compose"
-               else
-                   COMPOSE_CMD="docker-compose"
-               fi
-            else
-               echo "Error: docker compose or docker-compose not found"
-               exit 1
+            # 3. 변경 사항 반영 (No Docker / Systemd 방식)
+            echo "=== Starting 'No Docker' Deployment ==="
+
+            # 3-1. Backend 의존성 업데이트
+            if [ -f "backend/requirements.txt" ]; then
+              echo "Updating backend dependencies..."
+              cd backend
+              # venv가 있다면 활성화, 없으면 생성 (안전장치)
+              if [ ! -d "venv" ]; then
+                python3 -m venv venv
+              fi
+              source venv/bin/activate
+              pip install -r requirements.txt
+              deactivate
+              cd ..
             fi
 
-            echo "Using compose command: $COMPOSE_CMD"
+            # 3-2. Frontend 빌드 (package.json 있는 경우)
+            if [ -f "frontend/package.json" ]; then
+              echo "Building frontend..."
+              cd frontend
+              # npm install은 시간이 걸리므로 필요시 최적화 가능 (여기선 안전하게 매번 실행)
+              npm install --legacy-peer-deps
+              npm run build
+              cd ..
+            fi
             
-            # 서비스 재시작
-            $COMPOSE_CMD down
-            $COMPOSE_CMD up -d --build
+            # 3-3. Systemd 서비스 재시작
+            echo "Restarting Systemd services..."
+            # sudo 권한 필요 (NOPASSWD 설정되어 있다고 가정)
+            sudo systemctl restart autotrader-backend
+            sudo systemctl restart autotrader-worker
+            sudo systemctl restart autotrader-scheduler
+            sudo systemctl restart autotrader-frontend
+
+            # 4. 서비스 상태 확인
+            echo "Checking status..."
+            sleep 5
+            sudo systemctl status autotrader-backend --no-pager
+            sudo systemctl is-active autotrader-backend
             
-            # 4. 불필요한 이미지 정리
-            $DOCKER_CMD image prune -f
+            echo "=== Deployment Completed ==="
 
       - name: Health Check via SSH
         uses: appleboy/ssh-action@master
