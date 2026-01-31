@@ -25,22 +25,23 @@ class HybridTradingEngine:
         """
         self.ml_predictor = ml_predictor
         
-        # 기술적 지표 임계값 (v5.0 조정: 더 민감하게)
+        # 기술적 지표 임계값 (v5.2 조정: 안정적 우량주 패턴 매매)
+        # 잦은 매매 방지 및 가짜 반등 필터링
         self.thresholds = {
-            'rsi_oversold': 40,      # RSI 과매도 (35 -> 40 완화: 더 빨리 진입)
-            'rsi_overbought': 60,    # RSI 과매수 (65 -> 60: 더 빨리 익절)
-            'volume_surge': 1.3,     # 거래량 급등 (1.5 -> 1.3: 더 민감하게)
-            'bb_lower': 0.25,        # 볼린저 하단 (0.2 -> 0.25: 좀 더 관대)
-            'bb_upper': 0.75,        # 볼린저 상단 (0.8 -> 0.75: 더 빨리 경고)
+            'rsi_oversold': 30,      # RSI 과매도 (40 -> 30: 확실한 저점만 진입)
+            'rsi_overbought': 70,    # RSI 과매수 (60 -> 70: 추세 충분히 반영)
+            'volume_surge': 1.5,     # 거래량 급등 (1.3 -> 1.5: 확실한 수급만)
+            'bb_lower': 0.1,         # 볼린저 하단 (0.25 -> 0.1: 하단 터치 확실할 때)
+            'bb_upper': 0.9,         # 볼린저 상단 (0.75 -> 0.9: 상단 돌파 확실할 때)
             'macd_threshold': 0.0,   # MACD 골든크로스
         }
         
         # 신호 가중치
         self.weights = {
-            'rsi': 0.25,
-            'macd': 0.25,
-            'volume': 0.25,
-            'bollinger': 0.25,
+            'rsi': 0.3,    # RSI 비중 확대
+            'macd': 0.3,   # 추세 비중 확대
+            'volume': 0.2,
+            'bollinger': 0.2,
         }
     
     def analyze(self, market: str, df: pd.DataFrame) -> Tuple[str, float, Dict]:
@@ -68,27 +69,21 @@ class HybridTradingEngine:
             buy_strength = sum(buy_signals.values())
             sell_strength = sum(sell_signals.values())
             
-            # 3. 기본 판단
+            # 3. 기본 판단 (v5.2: 보수적 진입 / 빠른 청산)
             if buy_strength >= 3:
-                # 강한 매수 신호 (3개 이상)
+                # 강한 매수 신호 (3개 이상 시에만 진입)
                 action = "BUY"
                 base_confidence = 0.85
                 reason = f"강한 매수 신호 {buy_strength}개 감지"
-            elif buy_strength >= 2:
-                # 중간 매수 신호 (2개)
-                action = "BUY"
-                base_confidence = 0.65
-                reason = f"매수 신호 {buy_strength}개 감지"
-            elif sell_strength >= 3:
-                # 강한 매도 신호 (3개 이상)
-                action = "SELL"
-                base_confidence = 0.85
-                reason = f"강한 매도 신호 {sell_strength}개 감지"
             elif sell_strength >= 2:
-                # 중간 매도 신호 (2개)
+                # 매도 신호는 2개만 떠도 기민하게 반응 (이익 보전)
                 action = "SELL"
-                base_confidence = 0.65
+                base_confidence = 0.80
                 reason = f"매도 신호 {sell_strength}개 감지"
+            else:
+                action = "HOLD"
+                base_confidence = 0.5
+                reason = "신호 부족 (관망)"
             else:
                 # 신호 부족 → ML 보조 사용
                 if self.ml_predictor:

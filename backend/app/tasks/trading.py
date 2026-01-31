@@ -50,6 +50,9 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
     markets = list(set([p.market for p in positions]))
     
     try:
+        # [Rate Limit Prevention] API 호출 전 딜레이
+        await asyncio.sleep(0.5) 
+        
         # 현재가 일괄 조회
         current_prices = pyupbit.get_current_price(markets)
         # 단일 마켓일 경우 float 반환, 다수일 경우 dict 반환
@@ -72,10 +75,9 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
             pnl_pct = (current_price - pos.entry_price) / pos.entry_price
             
             # --- [Rule No.1: 돈을 잃지 마라] ---
-            # 1. 즉시 손절: -2.5% 이상 손실 시 무조건 청산 (기존 -3%에서 타이트하게 변경)
-            #    "이미 2.5% 잃었으면 더 이상 기다리지 않는다"
-            if pnl_pct <= -0.025:
-                logger.warning(f"🚨 URGENT LOSS CUT for {pos.market}: PnL {pnl_pct:.2%} <= -2.5% (TIGHTENED)")
+            # 1. 즉시 손절: -3.0% (Blue Chip은 변동성이 적으므로 3%면 큰 하락)
+            if pnl_pct <= -0.03:
+                logger.warning(f"🚨 URGENT LOSS CUT for {pos.market}: PnL {pnl_pct:.2%} <= -3.0%")
                 decision = TradeDecisionResult(
                     approved=True,
                     action="SELL",
@@ -86,10 +88,11 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
                     investment_ratio=1.0
                 )
                 executor.execute(db, decision)
+                await asyncio.sleep(1.0) # [Rate Limit] 매도 후 대기
                 continue
             
-            # 2. Hard Stop Limit: -3.5% 절대 마지노선 (기존 -4%에서 강화)
-            hard_stop_limit = -0.035
+            # 2. Hard Stop Limit: -4.0% 절대 마지노선
+            hard_stop_limit = -0.04
             
             if pnl_pct <= hard_stop_limit:
                 logger.warning(f"🚨 CRITICAL Hard Stop Limit Triggered for {pos.market}: PnL {pnl_pct:.2%} <= Limit {hard_stop_limit:.2%}")
@@ -103,32 +106,19 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
                     investment_ratio=1.0
                 )
                 executor.execute(db, decision)
+                await asyncio.sleep(1.0) # [Rate Limit]
                 continue
             
-            # 3. 소폭 손실 시 (-1.5% ~ -2.5%) 추세 확인 후 청산 고려
-            #    단, 추세 확인 없이 일단 Stop Loss만 타이트하게 조정
-            if pnl_pct <= -0.015 and pnl_pct > -0.025:
-                # Stop Loss를 현재가 -0.5%로 매우 타이트하게 조정 (급격한 하락 방어)
-                tight_stop = current_price * 0.995
-                if tight_stop > pos.stop_loss:
-                    old_sl = pos.stop_loss
-                    pos.stop_loss = tight_stop
-                    db.commit()
-                    logger.info(f"⚠️ Tightening SL for {pos.market} (PnL {pnl_pct:.1%}): {old_sl:,.0f} -> {tight_stop:,.0f}")
-
-            # --- [Rule No.1: Never Lose Money] ---
-            # 1. Trailing Stop (익절 보존): 가격이 상승하면 Stop Loss도 같이 위로 이동
-            # 목표: 수익 상태에서 하락 반전 시 수익을 확정 짓고 나오기 위함.
+            # 3. Trailing Stop (꺾이면 판다)
+            # 급등 후 하락세 전환 시 빠르게 매도
+            # 최고가 대비 일정 비율 하락 시 매도하는 로직이 필요하지만, 여기선 간이로 구현
+            # 이익 구간(+2% 이상)에서 현재가가 평단가보다 낮아지거나, 수익률이 급감하면 매도
             
-            # (1) 수익 구간 진입 시 (예: +1.5% 이상), 최소한 본전(수수료 포함)은 건지도록 Stop Loss 상향
-            break_even_price = pos.entry_price * 1.002 # 수수료 고려 0.2%
-            if current_price > pos.entry_price * 1.015: 
-                # 현재가가 진입가 대비 1.5% 이상 상승했다면 본전 방어 모드 발동
-                
-                # 새 스톱로스는 '현재가 - 2%' 또는 '본절가' 중 큰 값
-                # 상승폭이 클수록(예: 10% 수익), '현재가 - 2%'가 본절가보다 훨씬 높으므로 이익 실현선이 됨.
-                # 막 진입한 초기 수익구간(1.5%)에서는 '본절가'가 선택되어 원금 방어.
-                trailing_stop_price = max(current_price * 0.98, break_even_price)
+            # 본전 보존 로직
+            break_even_price = pos.entry_price * 1.002 # 수수료 포함 본전
+            if current_price > pos.entry_price * 1.02: 
+                # 2% 이상 수익나면 본전+0.5%를 Stop Loss로 설정
+                trailing_stop_price = max(current_price * 0.97, pos.entry_price * 1.005)
                 
                 if trailing_stop_price > pos.stop_loss:
                     old_sl = pos.stop_loss
@@ -138,6 +128,8 @@ def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
 
             # Stop Loss 체크
             if current_price <= pos.stop_loss:
+                # ... existing logic ...
+
                 logger.warning(f"🛑 Stop Loss Triggered for {pos.market}: Current {current_price:,.0f} <= Stop {pos.stop_loss:,.0f}")
                 
                 decision = TradeDecisionResult(

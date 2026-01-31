@@ -15,14 +15,14 @@ class BreakoutTradingStrategy:
     """
 
     def __init__(self):
-        # 전략 파라미터 (v5.0 조정)
-        self.vol_multiplier = 1.5  # 평균 거래량 대비 배수 (2.0 -> 1.5로 완화)
+        # 전략 파라미터 (v5.3 Strict: 잦은 거래 방지 및 우량주 추세 매매)
+        self.vol_multiplier = 2.5  # 평균 거래량 대비 2.5배 이상 (1.5 -> 2.5: 확실한 수급만)
         self.ma_short = 5
         self.ma_long = 20
-        self.rsi_min = 45   # RSI 하한 완화 (50 -> 45) - 더 빠른 진입
-        self.rsi_max = 88   # RSI 상한 상향 (85 -> 88) - 급등장 대응
+        self.rsi_min = 50   # (45 -> 50: 중립 이상)
+        self.rsi_max = 80   # (88 -> 80: 과열권 진입 전)
         
-        # 트레일링 스탑 파라미터 (신규)
+        # 트레일링 스탑 파라미터
         self.trailing_stop_pct = 0.02  # 고점 대비 2% 하락 시 청산
         self.position_high_prices: dict = {}  # {market: high_price}
         
@@ -51,53 +51,45 @@ class BreakoutTradingStrategy:
 
         # 현재 캔들 (Last) 및 직전 캔들 (Prev)
         current = df.iloc[-1]
-        prev = df.iloc[-2]
         
         # 2. 거래량 급증 체크
         vol_surge = current['volume'] > (current['vol_ma20'] * self.vol_multiplier)
         
         # 3. 가격 돌파 체크 (현재가가 MA20 위에 있고, 양봉이며, 상승 추세)
         price_breakout = (current['close'] > current['ma20']) and (current['close'] > current['open'])
-        trend_up = current['ma5'] > current['ma20'] # 정배열 초기 or 지속
+        trend_up = current['ma5'] > current['ma20'] # 정배열
         
         # 4. RSI 조건
         rsi_condition = (current['rsi'] >= self.rsi_min) and (current['rsi'] <= self.rsi_max)
         
-        # --- 매수 로직 (Breakout Buy) ---
-        # v5.0: 조건 완화 - 거래량 급증만으로도 매수 고려
-        if vol_surge and rsi_condition:
-            # 추가 확인: 직전 전고점 돌파 여부 (최근 20개 캔들 중 최고가 갱신 시도)
+        # --- 매수 로직 (Strict Breakout Buy) ---
+        # 조건: 거래량 급증 AND 정배열 AND RSI 조건 만족 (필수)
+        if vol_surge and rsi_condition and trend_up and price_breakout:
+            # 추가 확인: 직전 전고점 돌파 여부
             recent_high = df['high'].iloc[-22:-2].max() if len(df) >= 22 else df['high'].max()
             
-            # 현재가가 최근 고점 근처이거나 돌파했으면 더 강력
             msg = []
-            confidence = 0.55  # 기본 신뢰도 낮춤 (더 많은 기회 포착)
-            
-            # 가격 돌파 (양봉 + MA20 위)
-            if price_breakout:
-                confidence += 0.15
-                msg.append("MA20 돌파")
+            confidence = 0.7  # 기본 신뢰도 상향 (0.55 -> 0.7)
             
             if current['close'] > recent_high:
-                confidence += 0.2
+                confidence += 0.1
                 msg.append("전고점 돌파")
             
-            if trend_up:
+            # 거래량 폭발 Bonus
+            if current['volume'] > (current['vol_ma20'] * 3.0):
                 confidence += 0.1
-                msg.append("이평선 정배열")
-            
-            # 거래량 폭발 (v5.0: 2배로 완화)
-            if current['volume'] > (current['vol_ma20'] * 2.0):
-                confidence += 0.15
-                msg.append("거래량 폭발(2배+)")
-            elif current['volume'] > (current['vol_ma20'] * 3.0):
-                confidence += 0.2
-                msg.append("거래량 대폭발(3배+)")
+                msg.append("거래량 3배+")
                 
-            # RSI 모멘텀 보너스 (v5.0 신규)
-            if 55 <= current['rsi'] <= 70:
-                confidence += 0.05
-                msg.append("RSI 상승구간")
+            msg.append(f"거래량 {self.vol_multiplier}배, 정배열, 추세확인")
+            
+            # 우량주는 천천히 오르므로 너무 급한 상승(RSI > 75)은 조심
+            if current['rsi'] > 75:
+                 confidence -= 0.1
+                 msg.append("RSI 과열 주의")
+
+            return "BUY", min(confidence, 1.0), ", ".join(msg)
+
+        return "HOLD", 0.0, ""
             
             # 최종 신뢰도 캡
             confidence = min(confidence, 0.95)
