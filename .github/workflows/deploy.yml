@@ -147,11 +147,7 @@ jobs:
             # Check Backend
             if ! check_service "$BACKEND_URL" "Backend"; then
                echo "--- Backend Logs ---"
-               cd /home/ubuntu/autotraderx
-               # Docker command detection again for logs
-               DOCKER_CMD="docker"
-               if ! groups | grep -q "docker"; then DOCKER_CMD="sudo docker"; fi
-               $DOCKER_CMD compose logs --tail=50 backend
+               sudo journalctl -u autotrader-backend -n 50 --no-pager
                exit 1
             fi
             
@@ -159,10 +155,7 @@ jobs:
             # Frontend might return 200 or 304, usually 200 for root
             if ! check_service "$FRONTEND_URL" "Frontend"; then
                echo "--- Frontend Logs ---"
-               cd /home/ubuntu/autotraderx
-               DOCKER_CMD="docker"
-               if ! groups | grep -q "docker"; then DOCKER_CMD="sudo docker"; fi
-               $DOCKER_CMD compose logs --tail=50 frontend
+               sudo journalctl -u autotrader-frontend -n 50 --no-pager
                exit 1
             fi
             

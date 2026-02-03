@@ -57,16 +57,14 @@ DEBUG=false
 sudo systemctl restart autotrader-backend autotrader-worker autotrader-scheduler autotrader-frontend
 ```
 
-## 자동 배포 동작 방식
+## 자동 배포 동작 방식 (GitHub Actions)
 
-1. **git push** → GitHub에 코드 푸시
-2. **cron (1분마다)** → `auto_deploy.sh` 실행
-3. **변경 감지** → git pull 후 서비스 자동 재시작
+1. **git push** → GitHub에 코드 푸시 (master/main 브랜치)
+2. **GitHub Actions** → `Run Deploy` 워크플로우 실행 (`.github/workflows/deploy.yml`)
+3. **SSH 접속 & 배포** → 서버에 접속하여 git pull 및 서비스 재시작
+4. **Health Check** → Systemd 로그 확인 및 URL 접속 테스트 (`/api/health`)
 
-로그 확인:
-```bash
-tail -f ~/autotraderx/logs/deploy.log
-```
+GitHub Actions 로그 확인: [Actions 탭](https://github.com/oksk1111/autotraderx/actions)
 
 ## 서비스 관리 명령어
 
