@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.redis_client import get_redis_client
 from app.db.session import SessionLocal
 from app.ml.feature_builder import build_features_from_market_data, calculate_technical_indicators
 from app.services.data_pipeline import HistoricalDataService
@@ -384,6 +385,14 @@ async def run_cycle() -> None:
                     try:
                         persona_mgr = PersonaManager()
                         p_decisions = persona_mgr.evaluate_all(market, df)
+                        
+                        # [Dashboard Update] Save Persona Analysis to Redis
+                        try:
+                            rd = get_redis_client()
+                            if rd:
+                                rd.hset("persona_status", market, json.dumps(p_decisions))
+                        except Exception as re:
+                            logger.error(f"Redis save failed: {re}")
                         
                         best_buy = max([d for d in p_decisions if d['action'] == 'BUY'], key=lambda x: x['confidence'], default=None)
                         best_sell = max([d for d in p_decisions if d['action'] == 'SELL'], key=lambda x: x['confidence'], default=None)

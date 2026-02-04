@@ -4,6 +4,7 @@ import MetricsGrid from "./MetricsGrid";
 import TradeTable from "./TradeTable";
 import AccountInfo from "./AccountInfo";
 import TradingConfigPanel from "./TradingConfigPanel";
+import PersonaPanel from "./PersonaPanel";
 
 const api = axios.create({ baseURL: "/api" });
 
@@ -22,6 +23,11 @@ function DashboardPage() {
     const { data } = await api.get("/dashboard/snapshot");
     return data;
   });
+  
+  const personaQuery = useQuery(["personas"], async () => {
+    const { data } = await api.get("/dashboard/personas_status");
+    return data;
+  }, { refetchInterval: 5000 }); // Refresh every 5s
 
   return (
     <div className="page">
@@ -47,6 +53,11 @@ function DashboardPage() {
         snapshot={snapshotQuery.data}
         loading={metricsQuery.isLoading || snapshotQuery.isLoading} 
       />
+      
+      {/* Persona Strategy Board */}
+      <div style={{ marginTop: '1.5rem' }}>
+        <PersonaPanel data={personaQuery.data} loading={personaQuery.isLoading} />
+      </div>
 
       {/* Bottom Row: Recent Trades */}
       <TradeTable trades={tradesQuery.data} loading={tradesQuery.isLoading} />

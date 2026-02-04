@@ -1,9 +1,10 @@
 from __future__ import annotations
-
+import json
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
  
 from app.db.session import get_db
+from app.core.redis_client import get_redis_client
 from app.models import MLDecisionLog, TradeLog
 from app.schemas.trading import MLDecisionLogSchema, TradeLogSchema
 from app.services.state import SystemSnapshotService
@@ -36,3 +37,17 @@ def get_decision_logs(db: Session = Depends(get_db)) -> list[MLDecisionLog]:
 @router.get("/snapshot")
 def get_snapshot(service: SystemSnapshotService = Depends(SystemSnapshotService.from_settings)) -> dict:
     return service.snapshot()
+
+
+@router.get("/personas_status")
+def get_personas_status() -> dict:
+    result = {}
+    rd = get_redis_client()
+    if rd:
+        raw_data = rd.hgetall("persona_status")
+        for market, data_str in raw_data.items():
+            try:
+                result[market] = json.loads(data_str)
+            except:
+                pass
+    return result
