@@ -19,6 +19,7 @@ from app.trading.enhanced_engine import get_enhanced_engine
 from app.models.trading import AutoTradingConfig, TradePosition
 from app.trading.market_selector import MarketSelector
 from app.trading.breakout_strategy import BreakoutTradingStrategy
+from app.trading.personas import PersonaManager
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -378,6 +379,40 @@ async def run_cycle() -> None:
                     # Enhanced Engine으로 거래 신호 생성 (Hybrid + MultiTF)
                     action, confidence, details = enhanced_engine.get_enhanced_signal(market, df, multi_tf_data=multi_tf_dfs)
                     
+                    # [Persona Strategy Integration]
+                    # 페르소나 전략을 통한 신호 보정 (v3.5)
+                    try:
+                        persona_mgr = PersonaManager()
+                        p_decisions = persona_mgr.evaluate_all(market, df)
+                        
+                        best_buy = max([d for d in p_decisions if d['action'] == 'BUY'], key=lambda x: x['confidence'], default=None)
+                        best_sell = max([d for d in p_decisions if d['action'] == 'SELL'], key=lambda x: x['confidence'], default=None)
+                        
+                        if action == "HOLD":
+                            # 강력한 페르소나 매수 신호가 있으면 HOLD를 BUY로 전환
+                            if best_buy and best_buy['confidence'] >= 0.8:
+                                action = "BUY"
+                                confidence = best_buy['confidence']
+                                details['rationale'] = f"Persona Override ({best_buy['persona']}): {best_buy['reason']}"
+                                logger.info(f"🎭 Persona Override: Switching HOLD to BUY for {market} by {best_buy['persona']}")
+                            
+                            # 페르소나 매도 신호가 있으면 HOLD를 SELL로 전환 (리스크 관리)
+                            elif best_sell and best_sell['confidence'] >= 0.7:
+                                action = "SELL"
+                                confidence = best_sell['confidence']
+                                details['rationale'] = f"Persona Override ({best_sell['persona']}): {best_sell['reason']}"
+                                logger.info(f"🎭 Persona Override: Switching HOLD to SELL for {market} by {best_sell['persona']}")
+                                
+                        elif action == "BUY":
+                            # 매수 신호가 떴지만, 페르소나가 강력 매도를 외치면 취소
+                            if best_sell and best_sell['confidence'] >= 0.85:
+                                action = "HOLD"
+                                details['rationale'] = f"Persona Veto ({best_sell['persona']}): {best_sell['reason']}"
+                                logger.warning(f"🎭 Persona Veto: Blocking BUY for {market} due to {best_sell['persona']}")
+                                
+                    except Exception as pe:
+                        logger.error(f"Persona evaluation failed for {market}: {pe}")
+
                     # [Trend Review] 보유 종목에 대한 추세 재점검
                     # 만약 보유 중인데 손실이 크고(-3% 이상), 추세가 강력한 상승(BUY + High Confidence)이 아니라면 매도 검토
                     current_pos = db.query(TradePosition).filter(
