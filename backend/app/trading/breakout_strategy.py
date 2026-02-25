@@ -89,16 +89,6 @@ class BreakoutTradingStrategy:
 
             return "BUY", min(confidence, 1.0), ", ".join(msg)
 
-        return "HOLD", 0.0, ""
-            
-            # 최종 신뢰도 캡
-            confidence = min(confidence, 0.95)
-            
-            # 최소 조건: 1개 이상의 추가 시그널
-            if len(msg) >= 1:
-                rationale = f"🚀 Breakout: Vol({current['volume']:.0f}) > Avg*{self.vol_multiplier} + {', '.join(msg)}"
-                return "BUY", confidence, rationale
-
         # --- 매도 로직 (Trend Broken) v5.0 ---
         # 개선: 트레일링 스탑 + 피크 감지 추가
         

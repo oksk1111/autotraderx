@@ -39,16 +39,8 @@ class MarketSelector:
         selected_markets = [m for m in blue_chips if m in available_tickers]
         
         self.cached_markets = selected_markets
+        self.last_update = time.time()
+        
+        logger.info(f"✅ Market Selector Updated: {selected_markets} (Blue Chip {len(selected_markets)} coins)")
         return self.cached_markets
-            self.last_update = now
-            
-            logger.info(f"✅ Market Selector Updated: {selected_markets} (Min Volume: {self.min_volume/100000000:.0f}억, Caution Filtered)")
-            return selected_markets
-            
-        except Exception as e:
-            logger.error(f"Failed to update market list: {e}")
-            # 실패시 기존 캐시가 있으면 반환, 없으면 기본값
-            if self.cached_markets:
-                return self.cached_markets
-            return ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL"] # Fallback
 

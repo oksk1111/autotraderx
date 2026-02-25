@@ -30,7 +30,7 @@ market_selector = MarketSelector(top_k=10, min_volume=30_000_000_000)
 breakout_strategy = BreakoutTradingStrategy()
 
 
-def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
+async def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
     """
     오픈 포지션의 Stop Loss / Take Profit 체크 및 실행
     
@@ -208,11 +208,14 @@ async def run_cycle() -> None:
     markets = market_selector.get_top_volume_coins()
     
     # [Improvement] 보유 중인 코인도 분석 대상에 포함
+    balances = []
+    held_tickers = []
     try:
         upbit = pyupbit.Upbit(settings.upbit_access_key, settings.upbit_secret_key)
         balances = upbit.get_balances()
+        if not balances:
+            balances = []
         
-        held_tickers = []
         for b in balances:
             if b['currency'] == 'KRW': continue
             ticker = f"KRW-{b['currency']}"
@@ -224,6 +227,8 @@ async def run_cycle() -> None:
                 
     except Exception as e:
         logger.error(f"Failed to fetch balances for market Sync: {e}")
+        balances = []
+        held_tickers = []
         # 계속 진행 (기본 markets 만으로)
 
     logger.info(f"Selected Markets (including holdings): {markets}")
@@ -336,7 +341,7 @@ async def run_cycle() -> None:
     db: Session = SessionLocal()
     try:
         # 1. 기존 포지션 관리 (Stop Loss / Take Profit)
-        check_and_manage_positions(db, executor)
+        await check_and_manage_positions(db, executor)
         
         for market in markets:
             try:

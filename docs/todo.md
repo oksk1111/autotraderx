@@ -88,3 +88,14 @@
 
 ### Phase E (지속)
 - [ ] [P2] 전략 튜닝, A/B 테스트, RL 단계적 도입
+
+## 코드 품질/안정성 [P0] (2026-02-25 추가)
+- [x] [P0] SyntaxError 수정 (market_selector.py, hybrid_engine.py, breakout_strategy.py)
+- [x] [P0] async/await 오류 수정 (tasks/trading.py check_and_manage_positions)
+- [x] [P0] 변수 미정의 안전성 확보 (balances, held_tickers 초기화)
+- [x] [P0] WebSocket 데이터 파싱 수정 (data_pipeline.py UpbitStream)
+- [x] [P0] SELL 주문 결과 검증 추가 (engine.py)
+- [x] [P0] Division by Zero 방지 (multi_timeframe_engine.py)
+- [ ] [P1] Celery Worker 로그 모니터링 및 알림 연동
+- [ ] [P1] 구문 검사 자동화 (CI/CD 파이프라인에 AST 체크 추가)
+- [ ] [P2] 모든 전략 모듈에 대한 단위 테스트 작성

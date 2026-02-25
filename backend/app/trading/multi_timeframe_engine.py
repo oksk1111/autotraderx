@@ -188,8 +188,9 @@ class MultiTimeframeEngine:
         # 가격 변동률
         price_change = (recent['close'].iloc[-1] - recent['close'].iloc[0]) / recent['close'].iloc[0]
         
-        # 거래량 변화
-        volume_ratio = recent['volume'].iloc[-5:].mean() / recent['volume'].iloc[:5].mean()
+        # 거래량 변화 (division by zero 방지)
+        vol_early = recent['volume'].iloc[:5].mean()
+        volume_ratio = recent['volume'].iloc[-5:].mean() / vol_early if vol_early > 0 else 1.0
         
         # 모멘텀 판단
         momentum_value = abs(price_change) * volume_ratio

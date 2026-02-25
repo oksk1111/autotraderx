@@ -84,7 +84,7 @@ class HybridTradingEngine:
                 action = "HOLD"
                 base_confidence = 0.5
                 reason = "신호 부족 (관망)"
-            else:
+                
                 # 신호 부족 → ML 보조 사용
                 if self.ml_predictor:
                     # DataFrame에서 최근 24개 시퀀스 생성

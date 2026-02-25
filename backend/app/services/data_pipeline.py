@@ -25,13 +25,23 @@ class UpbitStream:
         self.markets = markets
 
     async def ticker_stream(self) -> AsyncGenerator[MarketTick, None]:
+        import json
         async with aiohttp.ClientSession() as session:
             uri = "wss://api.upbit.com/websocket/v1"
-            payload = [{"ticket": "autotrader"}, {"type": "ticker", "codes": self.markets}]
+            payload = [
+                {"ticket": "autotrader"},
+                {"type": "ticker", "codes": self.markets},
+                {"format": "DEFAULT"},  # JSON 텍스트 포맷 요청
+            ]
             async with session.ws_connect(uri) as ws:
                 await ws.send_json(payload)
                 async for msg in ws:
-                    data = msg.json(loads=None)
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        data = json.loads(msg.data)
+                    elif msg.type == aiohttp.WSMsgType.BINARY:
+                        data = json.loads(msg.data.decode('utf-8'))
+                    else:
+                        continue
                     yield MarketTick(
                         market=data["code"],
                         price=data["trade_price"],

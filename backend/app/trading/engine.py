@@ -302,22 +302,27 @@ class TradeExecutor:
                     
                 if balance_amount > 0:
                     result = upbit.sell_market_order(decision.market, balance_amount)
-                    logger.info(f"✅ SELL 주문 실행: {decision.market}, {balance_amount} {ticker} 전량 매도")
-                    # 성공 시 신호 및 신뢰도 저장
-                    self.signal_filter.set_last_signal(decision.market, "SELL", decision.confidence)
                     
-                    # TradePosition 종료
-                    try:
-                        positions = db.query(TradePosition).filter(
-                            TradePosition.market == decision.market,
-                            TradePosition.status == "OPEN"
-                        ).all()
-                        for pos in positions:
-                            pos.status = "CLOSED"
-                        db.commit()
-                        logger.info(f"📝 포지션 종료: {decision.market} ({len(positions)}건)")
-                    except Exception as e:
-                        logger.error(f"포지션 종료 실패: {e}")
+                    # 매도 주문 성공 여부 확인
+                    if result and isinstance(result, dict) and 'uuid' in result:
+                        logger.info(f"✅ SELL 주문 실행: {decision.market}, {balance_amount} {ticker} 전량 매도 (UUID: {result['uuid']})")
+                        # 성공 시 신호 및 신뢰도 저장
+                        self.signal_filter.set_last_signal(decision.market, "SELL", decision.confidence)
+                        
+                        # TradePosition 종료
+                        try:
+                            positions = db.query(TradePosition).filter(
+                                TradePosition.market == decision.market,
+                                TradePosition.status == "OPEN"
+                            ).all()
+                            for pos in positions:
+                                pos.status = "CLOSED"
+                            db.commit()
+                            logger.info(f"📝 포지션 종료: {decision.market} ({len(positions)}건)")
+                        except Exception as e:
+                            logger.error(f"포지션 종료 실패: {e}")
+                    else:
+                        logger.warning(f"⚠️ SELL 주문 실패: {decision.market} - {result}")
                 else:
                     logger.warning(f"⚠️ SELL 실패: {decision.market} 보유량 없음 (DB 동기화 진행)")
                     # 실제 보유량이 없는데 DB에 OPEN으로 남아있다면 강제 종료 (Sync fix)
