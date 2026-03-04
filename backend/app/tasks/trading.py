@@ -26,38 +26,98 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 # 전역 인스턴스
-market_selector = MarketSelector(top_k=10, min_volume=30_000_000_000)
+market_selector = MarketSelector(top_k=5, min_volume=50_000_000_000)  # v6.0: Top 5 대형주만
 breakout_strategy = BreakoutTradingStrategy()
+
+# v6.0: 일일 손실/거래 횟수 추적 (자본 보존 안전장치)
+_daily_pnl_krw: float = 0.0  # 일일 손익 (KRW)
+_daily_trade_count: int = 0  # 일일 거래 횟수
+_last_loss_time: float = 0.0  # 마지막 손절 시각 (timestamp)
+_daily_reset_date: str = ""  # 일일 리셋 날짜
+_initial_daily_balance: float = 0.0  # 당일 시작 잔고
+
+
+def _reset_daily_counters_if_needed(current_balance: float = 0.0) -> None:
+    """일일 카운터 리셋 (날짜 변경 시)"""
+    global _daily_pnl_krw, _daily_trade_count, _daily_reset_date, _initial_daily_balance
+    import datetime
+    today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    if _daily_reset_date != today:
+        _daily_pnl_krw = 0.0
+        _daily_trade_count = 0
+        _daily_reset_date = today
+        _initial_daily_balance = current_balance
+        logger.info(f"📅 Daily counters reset. Starting balance: {current_balance:,.0f} KRW")
+
+
+def _is_trading_allowed() -> tuple[bool, str]:
+    """
+    v6.0: 자본 보존 안전장치 체크
+    - 일일 최대 손실 한도 초과 시 매매 중단
+    - 손절 후 쿨다운 시간 미경과 시 매수 중단 (매도는 허용)
+    - 일일 최대 거래 횟수 초과 시 매매 중단
+    """
+    import time
+    global _daily_pnl_krw, _daily_trade_count, _last_loss_time, _initial_daily_balance
+    
+    # 1. 일일 최대 손실 한도
+    if _initial_daily_balance > 0:
+        daily_loss_pct = (_daily_pnl_krw / _initial_daily_balance) * 100
+        if daily_loss_pct <= -settings.daily_max_loss_percent:
+            return False, f"🚨 일일 최대 손실 한도 초과 ({daily_loss_pct:.1f}% <= -{settings.daily_max_loss_percent}%) - 매매 중단"
+    
+    # 2. 손절 후 쿨다운
+    if _last_loss_time > 0:
+        elapsed = time.time() - _last_loss_time
+        cooldown = settings.cooldown_after_loss_minutes * 60
+        if elapsed < cooldown:
+            remaining = int((cooldown - elapsed) / 60)
+            return False, f"⏳ 손절 후 쿨다운 중 ({remaining}분 남음) - 매수 중단 (매도는 허용)"
+    
+    # 3. 일일 최대 거래 횟수
+    if _daily_trade_count >= settings.max_daily_trades:
+        return False, f"🚫 일일 최대 거래 횟수 초과 ({_daily_trade_count}/{settings.max_daily_trades}) - 매매 중단"
+    
+    return True, "OK"
+
+
+def _record_trade_result(pnl_krw: float) -> None:
+    """거래 결과 기록"""
+    import time
+    global _daily_pnl_krw, _daily_trade_count, _last_loss_time
+    _daily_pnl_krw += pnl_krw
+    _daily_trade_count += 1
+    if pnl_krw < 0:
+        _last_loss_time = time.time()
+        logger.warning(f"📉 손실 기록: {pnl_krw:,.0f} KRW (일일 누적: {_daily_pnl_krw:,.0f} KRW, 거래 {_daily_trade_count}회)")
+    else:
+        logger.info(f"📈 수익 기록: +{pnl_krw:,.0f} KRW (일일 누적: {_daily_pnl_krw:,.0f} KRW, 거래 {_daily_trade_count}회)")
 
 
 async def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
     """
     오픈 포지션의 Stop Loss / Take Profit 체크 및 실행
     
-    v5.1 업그레이드:
-    - 즉시 손절: -3% 이상 손실 시 무조건 청산 (추세 무관)
-    - Hard Stop: -4% 절대 마지노선 유지
+    v6.0 전략 전면 개정 (Conservative Capital Preservation):
+    - 즉시 손절: -1.5% 이상 손실 시 무조건 청산
+    - Hard Stop: -2.5% 절대 마지노선
+    - Trailing Stop 3단계: +1% 본전 보존, +2% 수익 추적, +3% 타이트 추적
     - Rule No.1: 돈을 잃지 마라
     """
     from app.trading.engine import TradeDecisionResult
     
-    # OPEN 상태인 포지션 조회
     positions = db.query(TradePosition).filter(TradePosition.status == "OPEN").all()
     if not positions:
         return
 
     logger.info(f"Checking {len(positions)} open positions for Stop Loss/Take Profit")
     
-    # 마켓 목록 추출
     markets = list(set([p.market for p in positions]))
     
     try:
-        # [Rate Limit Prevention] API 호출 전 딜레이
         await asyncio.sleep(0.5) 
         
-        # 현재가 일괄 조회
         current_prices = pyupbit.get_current_price(markets)
-        # 단일 마켓일 경우 float 반환, 다수일 경우 dict 반환
         if isinstance(current_prices, (float, int)):
             current_prices = {markets[0]: current_prices}
         elif current_prices is None:
@@ -73,66 +133,79 @@ async def check_and_manage_positions(db: Session, executor: TradeExecutor) -> No
             
             current_price = float(current_price)
             
-            # [v5.1 핵심] PnL 계산
+            # PnL 계산
             pnl_pct = (current_price - pos.entry_price) / pos.entry_price
             
-            # --- [Rule No.1: 돈을 잃지 마라] ---
-            # 1. 즉시 손절: -3.0% (Blue Chip은 변동성이 적으므로 3%면 큰 하락)
-            if pnl_pct <= -0.03:
-                logger.warning(f"🚨 URGENT LOSS CUT for {pos.market}: PnL {pnl_pct:.2%} <= -3.0%")
+            # --- [Rule No.1: 돈을 잃지 마라] v6.0 ---
+            # 1. 즉시 손절: -1.5% (기존 -3% → -1.5%)
+            if pnl_pct <= -0.015:
+                logger.warning(f"🚨 LOSS CUT for {pos.market}: PnL {pnl_pct:.2%} <= -1.5%")
                 decision = TradeDecisionResult(
                     approved=True,
                     action="SELL",
                     market=pos.market,
                     confidence=1.0,
-                    rationale=f"Rule No.1: Immediate Loss Cut at {pnl_pct:.1%}",
+                    rationale=f"v6.0 Rule No.1: Loss Cut at {pnl_pct:.1%} (limit: -1.5%)",
                     emergency=True,
                     investment_ratio=1.0
                 )
                 executor.execute(db, decision)
-                await asyncio.sleep(1.0) # [Rate Limit] 매도 후 대기
+                pnl_krw = (current_price - pos.entry_price) * pos.size
+                _record_trade_result(pnl_krw)
+                await asyncio.sleep(1.0)
                 continue
             
-            # 2. Hard Stop Limit: -4.0% 절대 마지노선
-            hard_stop_limit = -0.04
-            
+            # 2. Hard Stop: -2.5% 절대 마지노선 (기존 -4% → -2.5%)
+            hard_stop_limit = -0.025
             if pnl_pct <= hard_stop_limit:
-                logger.warning(f"🚨 CRITICAL Hard Stop Limit Triggered for {pos.market}: PnL {pnl_pct:.2%} <= Limit {hard_stop_limit:.2%}")
+                logger.warning(f"🚨 HARD STOP for {pos.market}: PnL {pnl_pct:.2%} <= {hard_stop_limit:.2%}")
                 decision = TradeDecisionResult(
                     approved=True,
                     action="SELL",
                     market=pos.market,
                     confidence=1.0,
-                    rationale=f"Hard Stop Limit Triggered (PnL {pnl_pct:.1%})",
+                    rationale=f"Hard Stop Limit (PnL {pnl_pct:.1%})",
                     emergency=True,
                     investment_ratio=1.0
                 )
                 executor.execute(db, decision)
-                await asyncio.sleep(1.0) # [Rate Limit]
+                pnl_krw = (current_price - pos.entry_price) * pos.size
+                _record_trade_result(pnl_krw)
+                await asyncio.sleep(1.0)
                 continue
             
-            # 3. Trailing Stop (꺾이면 판다)
-            # 급등 후 하락세 전환 시 빠르게 매도
-            # 최고가 대비 일정 비율 하락 시 매도하는 로직이 필요하지만, 여기선 간이로 구현
-            # 이익 구간(+2% 이상)에서 현재가가 평단가보다 낮아지거나, 수익률이 급감하면 매도
+            # 3. v6.0 Improved Trailing Stop (3단계)
+            # 단계1: +1% 이상 수익 → 본전(수수료 포함) 보존
+            if current_price > pos.entry_price * 1.01:
+                breakeven_stop = pos.entry_price * 1.003  # 본전 + 수수료
+                if breakeven_stop > pos.stop_loss:
+                    old_sl = pos.stop_loss
+                    pos.stop_loss = breakeven_stop
+                    db.commit()
+                    logger.info(f"🟢 본전 보존: {pos.market} SL {old_sl:,.0f} → {pos.stop_loss:,.0f}")
             
-            # 본전 보존 로직
-            break_even_price = pos.entry_price * 1.002 # 수수료 포함 본전
-            if current_price > pos.entry_price * 1.02: 
-                # 2% 이상 수익나면 본전+0.5%를 Stop Loss로 설정
-                trailing_stop_price = max(current_price * 0.97, pos.entry_price * 1.005)
-                
+            # 단계2: +2% 이상 수익 → 수익 추적 (고점 대비 -1.2%)
+            if current_price > pos.entry_price * 1.02:
+                trailing_stop_price = max(current_price * 0.988, pos.entry_price * 1.01)
                 if trailing_stop_price > pos.stop_loss:
                     old_sl = pos.stop_loss
                     pos.stop_loss = trailing_stop_price
                     db.commit()
-                    logger.info(f"📈 Trailing Stop Updated for {pos.market}: {old_sl:,.0f} -> {pos.stop_loss:,.0f} (Price: {current_price:,.0f})")
+                    logger.info(f"📈 Trailing Stop: {pos.market} SL {old_sl:,.0f} → {pos.stop_loss:,.0f} (Price: {current_price:,.0f})")
+            
+            # 단계3: +3% 이상 수익 → 타이트 추적 (고점 대비 -0.8%)
+            if current_price > pos.entry_price * 1.03:
+                tight_trail = max(current_price * 0.992, pos.entry_price * 1.02)
+                if tight_trail > pos.stop_loss:
+                    old_sl = pos.stop_loss
+                    pos.stop_loss = tight_trail
+                    db.commit()
+                    logger.info(f"💰 Tight Trail: {pos.market} SL {old_sl:,.0f} → {pos.stop_loss:,.0f}")
 
             # Stop Loss 체크
             if current_price <= pos.stop_loss:
-                # ... existing logic ...
-
-                logger.warning(f"🛑 Stop Loss Triggered for {pos.market}: Current {current_price:,.0f} <= Stop {pos.stop_loss:,.0f}")
+                pnl_krw = (current_price - pos.entry_price) * pos.size
+                logger.warning(f"🛑 Stop Loss: {pos.market} Current {current_price:,.0f} <= Stop {pos.stop_loss:,.0f}")
                 
                 decision = TradeDecisionResult(
                     approved=True,
@@ -144,29 +217,30 @@ async def check_and_manage_positions(db: Session, executor: TradeExecutor) -> No
                     investment_ratio=1.0
                 )
                 executor.execute(db, decision)
+                _record_trade_result(pnl_krw)
                 
             # Take Profit 체크
             elif current_price >= pos.take_profit:
-                logger.info(f"💰 Take Profit Triggered for {pos.market}: Current {current_price:,.0f} >= Target {pos.take_profit:,.0f}")
+                pnl_krw = (current_price - pos.entry_price) * pos.size
+                logger.info(f"💰 Take Profit: {pos.market} Current {current_price:,.0f} >= Target {pos.take_profit:,.0f}")
                 
                 decision = TradeDecisionResult(
                     approved=True,
                     action="SELL",
                     market=pos.market,
                     confidence=1.0,
-                    rationale=f"Take Profit Triggered (Entry: {pos.entry_price:,.0f}, Current: {current_price:,.0f})",
+                    rationale=f"Take Profit (Entry: {pos.entry_price:,.0f}, Current: {current_price:,.0f}, +{pnl_pct:.1%})",
                     emergency=False,
                     investment_ratio=1.0
                 )
                 executor.execute(db, decision)
+                _record_trade_result(pnl_krw)
 
             # Time Limit 체크
             elif settings.max_position_hold_minutes > 0:
-                # 포지션 보유 시간 계산
                 now = datetime.datetime.now(datetime.timezone.utc)
                 entry_time = pos.created_at
                 
-                # DB에서 가져온 시간이 Naive할 경우 UTC로 간주
                 if entry_time.tzinfo is None:
                     entry_time = entry_time.replace(tzinfo=datetime.timezone.utc)
                 
@@ -193,18 +267,18 @@ async def check_and_manage_positions(db: Session, executor: TradeExecutor) -> No
 
 async def run_cycle() -> None:
     """
-    Main Trading Cycle
+    Main Trading Cycle v6.0 - Conservative Capital Preservation
     
-    [Philosophy v5.0] Wonyyotti x Buffett
-    1. Market Selection: Only High Volume & Healthy assets (No Scams/Caution items).
-    2. Continuous Review: All held positions are re-evaluated every cycle.
-    3. Strict Risk Management:
-       - Hard Stop at -4% (No questions asked).
-       - Soft Stop at -2% (Trailing).
-       - Trend Exit: If held asset is losing >3% and not a Strong Buy, EXIT.
+    [Philosophy v6.0] 자본 보존 최우선
+    1. 일일 손실 한도/거래 횟수 체크
+    2. 손절 후 쿨다운 (30분)
+    3. 높은 신뢰도(75%+)에서만 진입
+    4. 손익비 최소 1:2 (SL -1.5%, TP +3%)
+    5. 최대 투자비율 25% (단일 거래)
+    6. 페르소나: 매수 오버라이드 제거, 매도 거부권만 유지
     """
-    logger.info("Starting trading cycle")
-    # 동적 마켓 선정 (Top 10 거래대금, Caution 제외)
+    logger.info("Starting trading cycle v6.0")
+    # v6.0: 동적 마켓 선정 (Top 5 대형주만)
     markets = market_selector.get_top_volume_coins()
     
     # [Improvement] 보유 중인 코인도 분석 대상에 포함
@@ -326,6 +400,9 @@ async def run_cycle() -> None:
         }
         logger.info(f"Account Info: Total={total_value:,.0f} KRW, Available={krw_balance:,.0f} KRW, Positions={account_info['open_positions']}")
         
+        # v6.0: 일일 카운터 리셋 및 안전장치 체크
+        _reset_daily_counters_if_needed(total_value)
+        
     except Exception as e:
         logger.error(f"Failed to process account info: {e}")
         # db 세션 닫기
@@ -385,8 +462,7 @@ async def run_cycle() -> None:
                     # Enhanced Engine으로 거래 신호 생성 (Hybrid + MultiTF)
                     action, confidence, details = enhanced_engine.get_enhanced_signal(market, df, multi_tf_data=multi_tf_dfs)
                     
-                    # [Persona Strategy Integration]
-                    # 페르소나 전략을 통한 신호 보정 (v3.5)
+                    # [Persona Strategy Integration] v6.0: 매도 거부권만 유지, 매수 오버라이드 제거
                     try:
                         persona_mgr = PersonaManager()
                         p_decisions = persona_mgr.evaluate_all(market, df)
@@ -399,27 +475,21 @@ async def run_cycle() -> None:
                         except Exception as re:
                             logger.error(f"Redis save failed: {re}")
                         
-                        best_buy = max([d for d in p_decisions if d['action'] == 'BUY'], key=lambda x: x['confidence'], default=None)
                         best_sell = max([d for d in p_decisions if d['action'] == 'SELL'], key=lambda x: x['confidence'], default=None)
                         
-                        if action == "HOLD":
-                            # 강력한 페르소나 매수 신호가 있으면 HOLD를 BUY로 전환
-                            if best_buy and best_buy['confidence'] >= 0.8:
-                                action = "BUY"
-                                confidence = best_buy['confidence']
-                                details['rationale'] = f"Persona Override ({best_buy['persona']}): {best_buy['reason']}"
-                                logger.info(f"🎭 Persona Override: Switching HOLD to BUY for {market} by {best_buy['persona']}")
-                            
-                            # 페르소나 매도 신호가 있으면 HOLD를 SELL로 전환 (리스크 관리)
-                            elif best_sell and best_sell['confidence'] >= 0.7:
-                                action = "SELL"
-                                confidence = best_sell['confidence']
-                                details['rationale'] = f"Persona Override ({best_sell['persona']}): {best_sell['reason']}"
-                                logger.info(f"🎭 Persona Override: Switching HOLD to SELL for {market} by {best_sell['persona']}")
+                        # v6.0: 페르소나 매수 오버라이드 완전 제거 (FOMO 방지)
+                        # HOLD는 HOLD로 유지. 엔진이 확신할 때만 매수.
+                        
+                        if action == "HOLD" and best_sell and best_sell['confidence'] >= 0.7:
+                            # 매도 신호가 있으면 HOLD를 SELL로 전환 (리스크 관리만)
+                            action = "SELL"
+                            confidence = best_sell['confidence']
+                            details['rationale'] = f"Persona Risk Exit ({best_sell['persona']}): {best_sell['reason']}"
+                            logger.info(f"🎭 Persona Risk Exit: {market} by {best_sell['persona']}")
                                 
                         elif action == "BUY":
-                            # 매수 신호가 떴지만, 페르소나가 강력 매도를 외치면 취소
-                            if best_sell and best_sell['confidence'] >= 0.85:
+                            # v6.0: 매수 신호가 떴을 때 페르소나 매도 거부권 강화 (0.85→0.70)
+                            if best_sell and best_sell['confidence'] >= 0.70:
                                 action = "HOLD"
                                 details['rationale'] = f"Persona Veto ({best_sell['persona']}): {best_sell['reason']}"
                                 logger.warning(f"🎭 Persona Veto: Blocking BUY for {market} due to {best_sell['persona']}")
@@ -427,88 +497,82 @@ async def run_cycle() -> None:
                     except Exception as pe:
                         logger.error(f"Persona evaluation failed for {market}: {pe}")
 
-                    # [Trend Review] 보유 종목에 대한 추세 재점검
-                    # 만약 보유 중인데 손실이 크고(-3% 이상), 추세가 강력한 상승(BUY + High Confidence)이 아니라면 매도 검토
+                    # [Trend Review] v6.0: 손실 -1.5%에서 즉시 청산 (기존 -3%)
                     current_pos = db.query(TradePosition).filter(
                         TradePosition.market == market,
                         TradePosition.status == "OPEN"
                     ).first()
 
-                    # HOLD 상태거나, BUY 신호라도 신뢰도가 낮다면(0.7 미만) 손실 관리 모드 작동
-                    if current_pos and (action == "HOLD" or (action == "BUY" and confidence < 0.7)):
+                    if current_pos and (action == "HOLD" or (action == "BUY" and confidence < 0.75)):
                         try:
                             current_price = df.iloc[-1]['close']
                             entry_price = current_pos.entry_price
                             if entry_price > 0:
                                 pnl_pct = (current_price - entry_price) / entry_price
                                 
-                                # 3% 이상 손실 중인데 확실한 상승 추세가 아니라면 매도하여 리스크 관리
-                                if pnl_pct < -0.03:
-                                    logger.info(f"📉 Trend Review: {market} PnL {pnl_pct:.2%} & Signal is {action}({confidence:.2f}). Forcing Exit.")
+                                # v6.0: -1.5% 이상 손실 + 강한 상승 추세 아님 → 즉시 청산
+                                if pnl_pct < -0.015:
+                                    logger.info(f"📉 Trend Review: {market} PnL {pnl_pct:.2%} & Signal is {action}({confidence:.2f}). Cutting Loss.")
                                     action = "SELL"
-                                    confidence = 0.95  # 강제 매도 실행을 위해 높은 신뢰도 부여
-                                    details['rationale'] = f"Trend Review: Deep Loss ({pnl_pct:.1%}) without strong uptrend. Cutting Loss."
+                                    confidence = 0.95
+                                    details['rationale'] = f"v6.0 Trend Review: Loss ({pnl_pct:.1%}) without strong uptrend."
                         except Exception as e:
-                            logger.error(f"Error reviewing trend for held position {market}: {e}")
+                            logger.error(f"Error reviewing trend for {market}: {e}")
 
                     if action != "HOLD":
-                        # v5.0: 신뢰도 기반 투자 비율 상향 (더 공격적)
+                        # v6.0: 자본 보존 안전장치 체크 (매수만 차단, 매도는 항상 허용)
+                        if action == "BUY":
+                            trading_ok, reason = _is_trading_allowed()
+                            if not trading_ok:
+                                logger.warning(f"⛔ {market} BUY blocked: {reason}")
+                                action = "HOLD"
+                            
+                            # v6.0: 최소 신뢰도 체크 (75% 이상만 매수)
+                            elif confidence < settings.min_confidence_for_trade:
+                                logger.info(f"⏸️ {market} BUY skipped: confidence {confidence:.1%} < {settings.min_confidence_for_trade:.1%}")
+                                action = "HOLD"
+                            
+                            # v6.0: 최대 포지션 수 체크
+                            elif account_info["open_positions"] >= settings.max_open_positions:
+                                logger.info(f"⏸️ {market} BUY skipped: max positions reached ({account_info['open_positions']}/{settings.max_open_positions})")
+                                action = "HOLD"
+                        
+                    if action != "HOLD":
+                        # v6.0: 보수적 투자 비율 (기존의 절반 이하)
                         if confidence >= 0.90:
-                            investment_ratio = 0.40  # 최고 신뢰도: 40%
+                            investment_ratio = 0.25  # 최고: 25% (기존 40%)
                         elif confidence >= 0.85:
-                            investment_ratio = 0.30  # 기존 0.20 -> 0.30
+                            investment_ratio = 0.20  # 높음: 20% (기존 30%)
+                        elif confidence >= 0.80:
+                            investment_ratio = 0.15  # 양호: 15% (기존 25%)
                         elif confidence >= 0.75:
-                            investment_ratio = 0.25  # 기존 0.15 -> 0.25
-                        elif confidence >= 0.65:
-                            investment_ratio = 0.15  # 기존 0.10 -> 0.15
+                            investment_ratio = 0.10  # 최소: 10% (기존 15%)
                         else:
-                            investment_ratio = 0.10  # 기존 0.05 -> 0.10
+                            investment_ratio = 0.07  # 관망: 7%
+                        
+                        # 절대 상한 적용
+                        investment_ratio = min(investment_ratio, settings.max_investment_ratio)
                         
                         # SELL은 전량 매도
                         if action == "SELL":
                             investment_ratio = 1.0
                         
-                        # ATR 기반 동적 SL/TP 설정 (v4.2 개선)
-                        # ATR(Average True Range)을 활용하여 변동성에 맞는 손절/익절 설정
-                        atr = df.iloc[-1].get('atr', 0)
-                        atr_ratio = df.iloc[-1].get('atr_ratio', 0.02)  # 기본값 2%
-                        current_price = df.iloc[-1].get('close', 0)
+                        # v6.0: SL/TP 고정 (ATR 과신 방지, 확실한 손익비 1:2)
+                        stop_loss_pct = 0.015   # -1.5% 고정
+                        take_profit_pct = 0.03  # +3.0% 고정
                         
+                        # ATR 기반 미세 조정 (SL은 더 좁힐 수는 있지만 넓힐 수 없음)
+                        atr = df.iloc[-1].get('atr', 0)
+                        current_price = df.iloc[-1].get('close', 0)
                         if atr > 0 and current_price > 0:
-                            # v5.0: ATR 배수 기반 SL/TP (변동성 적응형)
-                            # SL: 1.5 ATR, TP: 3.0 ATR (손익비 1:2)
-                            atr_sl_multiplier = 1.5
-                            atr_tp_multiplier = 3.0  # 기존 2.5 -> 3.0 (급등 대응)
+                            atr_based_sl = min((atr * 1.0 / current_price), 0.015)  # ATR 1배, 최대 1.5%
+                            atr_based_tp = min((atr * 2.5 / current_price), 0.05)    # ATR 2.5배, 최대 5%
+                            stop_loss_pct = max(atr_based_sl, 0.008)  # 최소 0.8%
+                            take_profit_pct = max(atr_based_tp, 0.025)  # 최소 2.5%
                             
-                            # 고신뢰도일수록 더 넓은 TP 허용 (v5.0 강화)
-                            if confidence >= 0.9:
-                                atr_tp_multiplier = 4.0  # 손익비 1:3 (급등장 최대화)
-                                atr_sl_multiplier = 1.0  # 타이트한 SL
-                            elif confidence >= 0.8:
-                                atr_tp_multiplier = 3.5  # 손익비 1:2.5
-                                atr_sl_multiplier = 1.2  # 타이트한 SL
-                            
-                            # ATR 기반 퍼센티지
-                            stop_loss_pct = min((atr * atr_sl_multiplier / current_price), 0.04)  # 최대 4% (기존 5%)
-                            take_profit_pct = min((atr * atr_tp_multiplier / current_price), 0.15)  # 최대 15% (기존 10%)
-                            
-                            # 최소값 보장 (v5.0 조정)
-                            stop_loss_pct = max(stop_loss_pct, 0.012)  # 최소 1.2% (기존 1.5%)
-                            take_profit_pct = max(take_profit_pct, 0.03)  # 최소 3% (기존 2.5%)
-                        else:
-                            # ATR 없을 경우 신뢰도 기반 동적 기본값 (v5.0)
-                            if confidence >= 0.9:
-                                stop_loss_pct = 0.015
-                                take_profit_pct = 0.08  # 8% TP
-                            elif confidence >= 0.8:
-                                stop_loss_pct = 0.02
-                                take_profit_pct = 0.06  # 6% TP
-                            elif confidence >= 0.7:
-                                stop_loss_pct = 0.02
-                                take_profit_pct = 0.05  # 5% TP
-                            else:
-                                stop_loss_pct = 0.025
-                                take_profit_pct = 0.04  # 4% TP
+                            # v6.0: 손익비 최소 1:1.5 보장
+                            if take_profit_pct / stop_loss_pct < 1.5:
+                                take_profit_pct = stop_loss_pct * 2.0
                         
                         # TradeDecisionResult 생성
                         from app.trading.engine import TradeDecisionResult
@@ -536,8 +600,8 @@ async def run_cycle() -> None:
                             rationale=details.get('rationale', 'Enhanced Engine: No strong signal'),
                             emergency=False,
                             investment_ratio=0.0,
-                            max_loss_acceptable=0.03,
-                            take_profit_target=0.05,
+                            max_loss_acceptable=0.015,
+                            take_profit_target=0.03,
                         )
                         logger.debug(f"⏸️ Enhanced: {market} HOLD ({confidence:.1%})")
                 else:
@@ -566,11 +630,12 @@ async def run_cycle() -> None:
 
 async def run_emergency_check() -> None:
     """
-    긴급 거래 체크 (10초마다 실행)
-    - 급락/급등 실시간 감지
-    - 정규 매매 주기와 독립적으로 동작
+    긴급 거래 체크 (60초마다 실행)
+    v6.0: 긴급 매도(SELL)만 허용 - 긴급 매수(BUY)는 FOMO 매수이므로 차단
+    - 급락 시 보유 포지션 긴급 청산만 수행
+    - 급등 시 매수하지 않음 (이것이 가장 큰 손실 원인이었음)
     """
-    logger.debug("Starting emergency trading check")
+    logger.debug("Starting emergency trading check (v6.0: SELL-only)")
     
     db: Session = SessionLocal()
     try:
@@ -593,6 +658,11 @@ async def run_emergency_check() -> None:
                     'amount': float(balance['balance'])
                 })
         
+        # v6.0: 보유 포지션이 없으면 긴급 체크 불필요 (매수 안 하므로)
+        if not positions:
+            logger.debug("No open positions, skipping emergency check (v6.0: no emergency BUY)")
+            return
+        
         # 관심 마켓 (설정에서 가져오기)
         watch_markets = config.selected_markets if config.selected_markets else settings.tracked_markets
         
@@ -600,22 +670,33 @@ async def run_emergency_check() -> None:
         trader = EmergencyTrader()
         result = trader.check_all_markets(positions, watch_markets)
         
-        # 긴급 거래 실행
+        # v6.0: 긴급 SELL만 실행, BUY는 차단
+        sell_count = 0
+        buy_blocked = 0
         for action_item in result.get('emergency_actions', []):
             market = action_item['market']
             action = action_item['action']
             reason = action_item['reason']
             
-            # 실제 거래 실행
+            # v6.0: BUY 차단 (FOMO 매수 방지)
+            if action == "BUY":
+                logger.warning(f"⛔ {market} 긴급 BUY 차단됨 (v6.0 FOMO 방지): {reason}")
+                buy_blocked += 1
+                continue
+            
+            # SELL만 실행
             trade_result = trader.execute_emergency_trade(market, action, reason)
             
             if trade_result.get('success'):
-                logger.warning(f"✅ {market} 긴급 거래 실행됨: {action} - {reason}")
+                logger.warning(f"✅ {market} 긴급 매도 실행됨: {reason}")
+                # v6.0: 손실 기록
+                _record_trade_result(-500)  # 긴급 매도는 보통 손실
+                sell_count += 1
             else:
-                logger.error(f"❌ {market} 긴급 거래 실패: {trade_result.get('error')}")
+                logger.error(f"❌ {market} 긴급 매도 실패: {trade_result.get('error')}")
         
         if result['markets_checked'] > 0:
-            logger.info(f"Emergency check completed: {result['markets_checked']} markets, {len(result.get('emergency_actions', []))} actions triggered")
+            logger.info(f"Emergency check v6.0: {result['markets_checked']} markets, {sell_count} sells, {buy_blocked} buys blocked")
             
     except Exception as e:
         logger.error(f"Error in emergency trading check: {e}", exc_info=True)
@@ -626,11 +707,11 @@ async def run_emergency_check() -> None:
 async def run_tick_cycle() -> None:
     """
     Tick 단위 공격적 매매 (1분 단위)
-    - ML 신호만으로 빠른 매매 실행
-    - LLM 검증 없이 신뢰도 기반 즉시 진입/청산
-    - 최소 신뢰도 이상일 때만 거래
+    v6.0: 비활성화 - aggressive_trading_mode=False
+    ML 신호만으로 검증 없이 매매하는 것이 주요 손실 원인이었음
     """
     if not settings.aggressive_trading_mode:
+        logger.debug("⛔ Tick trading disabled (v6.0: aggressive_trading_mode=False)")
         return
     
     logger.debug("🚀 Starting tick trading cycle")
@@ -746,16 +827,11 @@ async def run_tick_cycle() -> None:
 async def run_pump_detection_loop() -> None:
     """
     실시간 모니터링 루프 (WebSocket 기반, 1분간 지속 실행) v5.0
-    
-    v5.0 업그레이드:
-    - PumpPredictor: 급등 조짐 사전 감지 + 피크 매도
-    - 트레일링 스탑: 수익 극대화
-    
-    Mode 1: Momentum Strategy (Pump buy) -> PumpPredictor 사용
-    Mode 2: Reversal Strategy (Peak sell, Dip buy)
-    Mode 3: Breakout Strategy (Trend Following) - **DEFAULT**
+    v6.0: 비활성화 - pump_detection_enabled=False
+    급등 매수(FOMO)가 대규모 손실의 핵심 원인이었음
     """
     if not settings.pump_detection_enabled:
+        logger.debug("⛔ Pump detection disabled (v6.0: pump_detection_enabled=False)")
         return
 
     import time

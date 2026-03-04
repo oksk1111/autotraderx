@@ -63,34 +63,41 @@ class Settings(BaseSettings):
     kakao_client_id: str = ""
     kakao_redirect_uri: str = "http://localhost:4173/auth/kakao/callback"
 
-    default_trade_amount: float = 50_000
-    max_open_positions: int = 3
-    stop_loss_percent: float = 2.0  # 워뇨띠 스타일: -2% 손절
-    take_profit_percent: float = 2.0  # 워뇨띠 스타일: +2% 익절
-    max_position_hold_minutes: int = 30  # 최대 포지션 보유 시간 (30분)
+    default_trade_amount: float = 10_000  # v6.0: 잔고 보호 (40K 기준)
+    max_open_positions: int = 1  # v6.0: 단일 포지션만 (자본 보존)
+    stop_loss_percent: float = 1.5  # v6.0: -1.5% 손절 (타이트)
+    take_profit_percent: float = 3.0  # v6.0: +3% 익절 (손익비 1:2)
+    max_position_hold_minutes: int = 60  # v6.0: 충분한 시간 부여 (30분→60분)
     
-    # 매매 주기 설정 (초단위, 기본값: 5분)
-    trading_cycle_seconds: int = 60
+    # 매매 주기 설정 (초단위) 
+    trading_cycle_seconds: int = 180  # v6.0: 3분 주기 (1분→3분, 과매매 방지)
     
-    # 공격적 매매 모드 설정
-    aggressive_trading_mode: bool = True  # True: tick 단위 공격적 매매 활성화
-    tick_interval_seconds: int = 60  # tick 매매 주기 (초단위, 기본값: 1분)
-    tick_min_confidence: float = 0.6  # tick 매매 최소 신뢰도 (기본값: 60%, v4.0 조정)
-    tick_max_positions: int = 5  # tick 매매 최대 동시 포지션 수
+    # 공격적 매매 모드 설정 - v6.0: 비활성화 (자본 보존 최우선)
+    aggressive_trading_mode: bool = False  # v6.0: 비활성화
+    tick_interval_seconds: int = 180
+    tick_min_confidence: float = 0.80  # v6.0: 80% 이상만
+    tick_max_positions: int = 1
 
-    # 펌핑 감지 (Pump Detection) 설정 [v5.0 업그레이드]
-    pump_detection_enabled: bool = True
-    pump_threshold_percent: float = 0.8   # 0.8% 상승 시 조짐 감지 (기존 1.5%→0.8%)
-    pump_check_interval: float = 1.0      # 1초마다 체크 (기존 2초→1초)
-    pump_lookback_seconds: int = 30       # 최근 30초 기준 (기존 60초→30초)
-    pump_investment_ratio: float = 0.30   # 펌핑 감지 시 30% 투입 (기존 20%→30%)
+    # 펌핑 감지 (Pump Detection) 설정 - v6.0: 비활성화 (FOMO 매수 방지)
+    pump_detection_enabled: bool = False  # v6.0: 비활성화 (FOMO 매수가 손실의 주 원인)
+    pump_threshold_percent: float = 2.0   # v6.0: 보수적
+    pump_check_interval: float = 5.0
+    pump_lookback_seconds: int = 60
+    pump_investment_ratio: float = 0.15   # v6.0: 15%로 축소
     
-    # v5.0 신규: 피크 감지 및 트레일링 스탑 설정
+    # 피크 감지 및 트레일링 스탑 설정
     trailing_stop_enabled: bool = True
-    trailing_stop_pct: float = 0.015      # 고점 대비 1.5% 하락 시 매도
-    peak_rsi_threshold: float = 78.0      # RSI 78 이상에서 하락 시 피크 감지
+    trailing_stop_pct: float = 0.012      # v6.0: 고점 대비 1.2% 하락 시 매도 (더 타이트)
+    peak_rsi_threshold: float = 75.0      # v6.0: RSI 75로 낮춤 (더 빨리 청산)
+    
+    # v6.0 신규: 자본 보존 안전장치 (Capital Preservation)
+    daily_max_loss_percent: float = 3.0   # 일일 최대 손실 3% → 자동 매매 중단
+    min_confidence_for_trade: float = 0.75  # 최소 신뢰도 75% (0.6→0.75)
+    max_investment_ratio: float = 0.25    # 단일 거래 최대 투자비율 25%
+    cooldown_after_loss_minutes: int = 30  # 손절 후 30분 쿨다운
+    max_daily_trades: int = 6             # 일일 최대 거래 횟수 6회
 
-    tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL"]
+    tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH", "KRW-XRP"]  # v6.0: 메이저 3개만 (분산 줄임)
 
     slack_webhook_url: str | None = None
     telegram_bot_token: str | None = None

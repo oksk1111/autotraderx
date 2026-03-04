@@ -16,15 +16,15 @@ celery_app = Celery(
     broker=settings.resolved_redis_url,
     backend=settings.resolved_redis_url,
 )
-# Beat 스케줄 동적 생성
+# Beat 스케줄 동적 생성 (v6.0: 보수적 주기)
 beat_schedule = {
     'trading-cycle-scalping': {
         'task': 'app.celery_app.run_trading_cycle',
-        'schedule': float(settings.trading_cycle_seconds),  # 환경변수로 설정 가능 (기본값: 1분, v4.0)
+        'schedule': float(settings.trading_cycle_seconds),  # v6.0: 180초 (3분)
     },
     'emergency-trading-check': {
         'task': 'app.celery_app.run_emergency_check',
-        'schedule': 60.0,  # 60초(1분)마다 긴급 체크 (API 요청 제한 방지)
+        'schedule': 120.0,  # v6.0: 120초(2분)마다 긴급 체크 (60→120, API 부하 감소)
     },
     'system-health-check': {
         'task': 'app.celery_app.run_health_check',
