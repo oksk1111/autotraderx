@@ -39,6 +39,29 @@ Backend runs at `http://localhost:8000/api`, frontend dashboard at `http://local
 - Frontend dev server: `npm install && npm run dev` inside `frontend`.
 - Celery worker: `celery -A app.celery_app.celery_app worker --loglevel=info`
 
+## Next Strategy Rollout (Cloud, systemd)
+
+For non-docker cloud deployments, use the rollout helper:
+
+```bash
+chmod +x deploy/run_next_strategy.sh
+PROJECT_DIR=/home/ubuntu/autotraderx ./deploy/run_next_strategy.sh
+```
+
+It performs:
+- `git fetch/pull`
+- service restart (`autotrader-backend`, `autotrader-worker`, `autotrader-scheduler`, `autotrader-frontend`)
+- health checks via `systemctl is-active`
+- surge alert smoke task trigger via Celery
+
+Validate surge alert settings and notification readiness:
+
+```bash
+cd backend
+source venv/bin/activate
+python scripts/test_surge_alert_config.py
+```
+
 ### Utility Scripts
 
 - **Position Sync**: Sync Upbit account balance with local database.
