@@ -15,8 +15,10 @@ from app.db.session import SessionLocal
 from app.ml.feature_builder import build_features_from_market_data, calculate_technical_indicators
 from app.services.data_pipeline import HistoricalDataService
 from app.services.trading.emergency_trader import EmergencyTrader
+from app.services.notifications import Notifier
 from app.trading.engine import TradeExecutor, TradingEngine
 from app.trading.enhanced_engine import get_enhanced_engine
+from app.trading.capital_preservation_strategy import get_capital_preservation_strategy
 from app.models.trading import AutoTradingConfig, TradePosition
 from app.trading.market_selector import MarketSelector
 from app.trading.breakout_strategy import BreakoutTradingStrategy
@@ -92,6 +94,112 @@ def _record_trade_result(pnl_krw: float) -> None:
         logger.warning(f"📉 손실 기록: {pnl_krw:,.0f} KRW (일일 누적: {_daily_pnl_krw:,.0f} KRW, 거래 {_daily_trade_count}회)")
     else:
         logger.info(f"📈 수익 기록: +{pnl_krw:,.0f} KRW (일일 누적: {_daily_pnl_krw:,.0f} KRW, 거래 {_daily_trade_count}회)")
+
+
+async def _run_capital_preservation_cycle(
+    db: Session,
+    executor: TradeExecutor,
+    markets: list[str],
+    multi_tf_data_dict: dict,
+    account_info: dict,
+) -> None:
+    """Execute the new capital-preservation-first strategy path."""
+    from app.trading.engine import TradeDecisionResult
+    import pandas as pd
+
+    strategy = get_capital_preservation_strategy()
+
+    for market in markets:
+        try:
+            market_tf_data = multi_tf_data_dict.get(market, {})
+            d1h = market_tf_data.get("minute60", [])
+            d15 = market_tf_data.get("minute15", [])
+            d5 = market_tf_data.get("minute5", [])
+
+            if len(d1h) < 80 or len(d15) < 80 or len(d5) < 50:
+                logger.debug("[%s] skipped: not enough candles", market)
+                continue
+
+            df_1h = pd.DataFrame(d1h)
+            df_15m = pd.DataFrame(d15)
+            df_5m = pd.DataFrame(d5)
+
+            for frame in (df_1h, df_15m, df_5m):
+                if "index" in frame.columns:
+                    frame.drop(columns=["index"], inplace=True)
+
+            current_pos = db.query(TradePosition).filter(
+                TradePosition.market == market,
+                TradePosition.status == "OPEN"
+            ).first()
+
+            has_position = current_pos is not None
+            decision_result = strategy.analyze(
+                market=market,
+                df_1h=df_1h,
+                df_15m=df_15m,
+                df_5m=df_5m,
+                has_position=has_position,
+            )
+
+            action = decision_result.action
+
+            # Buy guardrails are enforced here; sells are always allowed.
+            if action == "BUY":
+                trading_ok, reason = _is_trading_allowed()
+                if not trading_ok:
+                    logger.warning("[%s] BUY blocked: %s", market, reason)
+                    action = "HOLD"
+                elif account_info["open_positions"] >= settings.max_open_positions:
+                    logger.info("[%s] BUY blocked: max open positions", market)
+                    action = "HOLD"
+                elif decision_result.confidence < settings.min_confidence_for_trade:
+                    logger.info(
+                        "[%s] BUY blocked: low confidence %.1f%%",
+                        market,
+                        decision_result.confidence * 100,
+                    )
+                    action = "HOLD"
+
+            if action == "BUY" and has_position:
+                action = "HOLD"
+
+            if action == "SELL" and not has_position:
+                action = "HOLD"
+
+            if action == "HOLD":
+                continue
+
+            investment_ratio = decision_result.investment_ratio
+            if action == "SELL":
+                investment_ratio = 1.0
+            else:
+                investment_ratio = min(investment_ratio, settings.max_investment_ratio)
+
+            decision = TradeDecisionResult(
+                approved=True,
+                action=action,
+                market=market,
+                confidence=decision_result.confidence,
+                rationale=f"CapitalPreservation: {decision_result.rationale}",
+                emergency=False,
+                investment_ratio=investment_ratio,
+                max_loss_acceptable=decision_result.stop_loss_pct,
+                take_profit_target=decision_result.take_profit_pct,
+            )
+            executor.execute(db, decision, account_info["available_balance"])
+            logger.info(
+                "CapitalPreservation %s %s conf=%.1f%% sl=%.2f%% tp=%.2f%%",
+                market,
+                action,
+                decision_result.confidence * 100,
+                decision_result.stop_loss_pct * 100,
+                decision_result.take_profit_pct * 100,
+            )
+
+        except Exception as e:
+            logger.error(f"CapitalPreservation cycle error for {market}: {e}", exc_info=True)
+            continue
 
 
 async def check_and_manage_positions(db: Session, executor: TradeExecutor) -> None:
@@ -419,6 +527,16 @@ async def run_cycle() -> None:
     try:
         # 1. 기존 포지션 관리 (Stop Loss / Take Profit)
         await check_and_manage_positions(db, executor)
+
+        if settings.use_capital_preservation_strategy:
+            await _run_capital_preservation_cycle(
+                db=db,
+                executor=executor,
+                markets=markets,
+                multi_tf_data_dict=multi_tf_data_dict,
+                account_info=account_info,
+            )
+            return
         
         for market in markets:
             try:
@@ -626,6 +744,73 @@ async def run_cycle() -> None:
                 continue
     finally:
         db.close()
+
+
+async def run_surge_alert_loop() -> None:
+    """Alert-only websocket loop for sudden surges. No auto-buy execution."""
+    if not settings.surge_alert_enabled:
+        logger.debug("surge alert disabled")
+        return
+
+    import time
+    from app.services.data_pipeline import UpbitStream
+
+    markets = market_selector.get_top_volume_coins()
+    if not markets:
+        markets = settings.tracked_markets
+
+    stream = UpbitStream(markets)
+    notifier = Notifier(settings)
+    baseline: dict[str, tuple[float, float]] = {}
+    last_alert: dict[str, float] = {}
+    end_time = time.time() + 55
+
+    logger.info(
+        "Starting surge alert websocket loop: threshold=%.2f%%, window=%ss",
+        settings.surge_alert_threshold_percent,
+        settings.surge_alert_window_seconds,
+    )
+
+    try:
+        async for tick in stream.ticker_stream():
+            now = time.time()
+            if now >= end_time:
+                break
+
+            base_price, base_ts = baseline.get(tick.market, (tick.price, now))
+            if now - base_ts > settings.surge_alert_window_seconds:
+                baseline[tick.market] = (tick.price, now)
+                continue
+
+            if base_price <= 0:
+                baseline[tick.market] = (tick.price, now)
+                continue
+
+            change_pct = ((tick.price - base_price) / base_price) * 100
+            if change_pct < settings.surge_alert_threshold_percent:
+                continue
+
+            # Liquidity filter: 24h accumulated trade value on ticker stream.
+            if tick.volume < settings.surge_alert_min_volume_24h:
+                continue
+
+            prev = last_alert.get(tick.market, 0.0)
+            if now - prev < settings.surge_alert_cooldown_seconds:
+                continue
+
+            msg = (
+                f"{tick.market} surge {change_pct:.2f}% in ~{int(now - base_ts)}s\n"
+                f"price={tick.price:,.0f}, 24h volume={tick.volume:,.0f}\n"
+                "action policy: alert-only (no FOMO auto-buy)"
+            )
+            await notifier.send("SURGE ALERT", msg, level="WARNING")
+            logger.warning("SURGE ALERT: %s", msg.replace("\n", " | "))
+
+            last_alert[tick.market] = now
+            baseline[tick.market] = (tick.price, now)
+
+    except Exception as e:
+        logger.error("surge alert loop error: %s", e, exc_info=True)
 
 
 async def run_emergency_check() -> None:

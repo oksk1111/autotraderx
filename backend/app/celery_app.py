@@ -36,6 +36,12 @@ beat_schedule = {
     },
 }
 
+if settings.surge_alert_enabled:
+    beat_schedule['surge-alert-loop'] = {
+        'task': 'app.celery_app.run_surge_alert_loop',
+        'schedule': 60.0,
+    }
+
 # 펌핑 감지 모드 활성화 시 스케줄 추가
 if settings.pump_detection_enabled:
     beat_schedule['pump-detection-loop'] = {
@@ -94,6 +100,15 @@ def run_pump_detection() -> str:
 
     logger.info("Triggering pump detection loop")
     asyncio.run(run_pump_detection_loop())
+    return "ok"
+
+
+@celery_app.task
+def run_surge_alert_loop() -> str:
+    from app.tasks.trading import run_surge_alert_loop  # pylint: disable=import-outside-toplevel
+
+    logger.info("Triggering surge alert websocket loop")
+    asyncio.run(run_surge_alert_loop())
     return "ok"
 
 

@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     max_investment_ratio: float = 0.25    # 단일 거래 최대 투자비율 25%
     cooldown_after_loss_minutes: int = 30  # 손절 후 30분 쿨다운
     max_daily_trades: int = 6             # 일일 최대 거래 횟수 6회
+    use_capital_preservation_strategy: bool = True
+
+    # 급등 스트리밍 알림 (WebSocket, alert-only)
+    surge_alert_enabled: bool = True
+    surge_alert_threshold_percent: float = 1.8
+    surge_alert_window_seconds: int = 20
+    surge_alert_cooldown_seconds: int = 180
+    surge_alert_min_volume_24h: float = 35_000_000_000
 
     tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH", "KRW-XRP"]  # v6.0: 메이저 3개만 (분산 줄임)
 
