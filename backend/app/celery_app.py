@@ -42,15 +42,7 @@ if settings.surge_alert_enabled:
         'schedule': 60.0,
     }
 
-# Legacy pump detection loop retired; surge alert loop is used for realtime signaling.
-
-# 공격적 매매 모드가 활성화되면 tick 매매 스케줄 추가
-if settings.aggressive_trading_mode:
-    beat_schedule['tick-trading-cycle'] = {
-        'task': 'app.celery_app.run_tick_trading',
-        'schedule': float(settings.tick_interval_seconds),  # tick 주기 (기본값: 1분)
-    }
-    logger.info(f"🚀 Aggressive trading mode enabled: {settings.tick_interval_seconds}s interval, min confidence {settings.tick_min_confidence:.0%}")
+# Legacy momentum/reversal execution loops retired.
 
 celery_app.conf.update(
     task_serializer="json",
@@ -76,15 +68,6 @@ def run_emergency_check() -> str:
 
     logger.debug("Triggering emergency trading check")
     asyncio.run(run_emergency_check())
-    return "ok"
-
-
-@celery_app.task
-def run_tick_trading() -> str:
-    from app.tasks.trading import run_tick_cycle  # pylint: disable=import-outside-toplevel
-
-    logger.debug("Triggering tick trading cycle")
-    asyncio.run(run_tick_cycle())
     return "ok"
 
 

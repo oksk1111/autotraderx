@@ -693,23 +693,3 @@ async def run_emergency_check() -> None:
     finally:
         db.close()
 
-
-async def run_tick_cycle() -> None:
-    """
-    Tick 단위 공격적 매매 (1분 단위)
-    v6.0: 비활성화 - aggressive_trading_mode=False
-    ML 신호만으로 검증 없이 매매하는 것이 주요 손실 원인이었음
-    """
-    logger.info("Tick trading legacy path retired. Using LLM auto trading path only.")
-    return
-
-
-async def run_pump_detection_loop() -> None:
-    """
-    실시간 모니터링 루프 (WebSocket 기반, 1분간 지속 실행) v5.0
-    v6.0: 비활성화 - pump_detection_enabled=False
-    급등 매수(FOMO)가 대규모 손실의 핵심 원인이었음
-    """
-    logger.info("Pump/momentum/reversal loop retired. LLM auto trading path is active.")
-    return
-

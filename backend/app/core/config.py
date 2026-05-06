@@ -72,23 +72,7 @@ class Settings(BaseSettings):
     # 매매 주기 설정 (초단위) 
     trading_cycle_seconds: int = 180  # v6.0: 3분 주기 (1분→3분, 과매매 방지)
     
-    # 공격적 매매 모드 설정 - v6.0: 비활성화 (자본 보존 최우선)
-    aggressive_trading_mode: bool = False  # v6.0: 비활성화
-    tick_interval_seconds: int = 180
-    tick_min_confidence: float = 0.80  # v6.0: 80% 이상만
-    tick_max_positions: int = 1
-
-    # 펌핑 감지 (Pump Detection) 설정 - v6.0: 비활성화 (FOMO 매수 방지)
-    pump_detection_enabled: bool = False  # v6.0: 비활성화 (FOMO 매수가 손실의 주 원인)
-    pump_threshold_percent: float = 2.0   # v6.0: 보수적
-    pump_check_interval: float = 5.0
-    pump_lookback_seconds: int = 60
-    pump_investment_ratio: float = 0.15   # v6.0: 15%로 축소
-    
-    # 피크 감지 및 트레일링 스탑 설정
-    trailing_stop_enabled: bool = True
-    trailing_stop_pct: float = 0.012      # v6.0: 고점 대비 1.2% 하락 시 매도 (더 타이트)
-    peak_rsi_threshold: float = 75.0      # v6.0: RSI 75로 낮춤 (더 빨리 청산)
+    # Legacy momentum/reversal/pump settings removed.
     
     # v6.0 신규: 자본 보존 안전장치 (Capital Preservation)
     daily_max_loss_percent: float = 3.0   # 일일 최대 손실 3% → 자동 매매 중단
@@ -97,7 +81,6 @@ class Settings(BaseSettings):
     cooldown_after_loss_minutes: int = 30  # 손절 후 30분 쿨다운
     max_daily_trades: int = 6             # 일일 최대 거래 횟수 6회
     llm_autotrading_enabled: bool = True
-    use_capital_preservation_strategy: bool = False
 
     # 급등 스트리밍 알림 (WebSocket, alert-only)
     surge_alert_enabled: bool = True

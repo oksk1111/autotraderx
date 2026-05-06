@@ -41,16 +41,9 @@ function TradingConfigPanel() {
     }
   };
 
-  const handleStrategyChange = (e) => {
-    if (config) {
-      updateMutation.mutate({ ...config, strategy_option: e.target.value });
-    }
-  };
-
   if (isLoading) return <div className="panel loading">Loading config...</div>;
 
   const currentCycle = config?.trading_cycle_seconds || 60;
-  const currentStrategy = config?.strategy_option || "reversal_strategy";
   const isActive = config?.is_active || false;
 
   return (
@@ -73,28 +66,20 @@ function TradingConfigPanel() {
       </div>
 
       <div style={{ marginBottom: '1.5rem', padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
-        <label className="stat-label" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Strategy Options</label>
-        <select 
-            value={currentStrategy} 
-            onChange={handleStrategyChange}
-            style={{ 
-                width: '100%', 
-                padding: '0.8rem', 
-                background: 'var(--bg-secondary)', 
-                color: 'var(--text-primary)', 
-                border: '1px solid var(--border-color)',
-                borderRadius: '4px',
-                fontSize: '1rem',
-                cursor: 'pointer'
-            }}
-        >
-            <option value="momentum_strategy" style={{ background: '#1e293b', color: '#f1f5f9' }}>Option 1: 추격 매수 (Momentum / Pump)</option>
-            <option value="reversal_strategy" style={{ background: '#1e293b', color: '#f1f5f9' }}>Option 2: 역추세 매매 (Reversal: Peak Sell / Dip Buy)</option>
-        </select>
+        <label className="stat-label" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Strategy Mode</label>
+        <div style={{
+          width: '100%',
+          padding: '0.8rem',
+          background: 'var(--bg-secondary)',
+          color: 'var(--text-primary)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '4px',
+          fontSize: '1rem'
+        }}>
+          LLM Autonomous Trading (Full Auto)
+        </div>
         <div style={{ marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            {currentStrategy === 'momentum_strategy' 
-                ? "🚀 급등 시 매수하여 상승세에 편승합니다." 
-                : "📉 급락 시 매수, 급등 시 매도하여 변동성을 활용합니다."}
+          Legacy momentum/reversal options removed. Trading decisions are fully automated by LLM risk validation.
         </div>
       </div>
 
