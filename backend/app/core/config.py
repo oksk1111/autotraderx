@@ -32,13 +32,13 @@ class Settings(BaseSettings):
     upbit_access_key: str = ""
     upbit_secret_key: str = ""
 
-    # AI/LLM 설정
-    use_ai_verification: bool = False  # ML 및 LLM 검증 비활성화 -> 기술적 지표/전략 알고리즘 우선
-    use_groq: bool = False
+    # AI/LLM 설정 (LLM 중심 자동투자 기본)
+    use_ai_verification: bool = True
+    use_groq: bool = True
     use_ollama: bool = False
     
-    # ML 모델 사용 여부 (Configurable) - v4.1 Update
-    use_ml_models: bool = False  # ML 모델 로드 및 예측 비활성화 (클라우드 비용/리소스 절감)
+    # ML 모델 사용 여부 (LLM 검증 입력용 신호 생성에 사용)
+    use_ml_models: bool = True
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
     ollama_base_url: str = "http://host.docker.internal:11434"
@@ -96,7 +96,8 @@ class Settings(BaseSettings):
     max_investment_ratio: float = 0.25    # 단일 거래 최대 투자비율 25%
     cooldown_after_loss_minutes: int = 30  # 손절 후 30분 쿨다운
     max_daily_trades: int = 6             # 일일 최대 거래 횟수 6회
-    use_capital_preservation_strategy: bool = True
+    llm_autotrading_enabled: bool = True
+    use_capital_preservation_strategy: bool = False
 
     # 급등 스트리밍 알림 (WebSocket, alert-only)
     surge_alert_enabled: bool = True

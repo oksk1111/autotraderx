@@ -1,35 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import datetime
 from datetime import timedelta, timezone
-import websockets
+from typing import Any, cast
 import pyupbit
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.core.redis_client import get_redis_client
 from app.db.session import SessionLocal
-from app.ml.feature_builder import build_features_from_market_data, calculate_technical_indicators
+from app.ml.feature_builder import build_features_from_market_data
 from app.services.data_pipeline import HistoricalDataService
 from app.services.trading.emergency_trader import EmergencyTrader
 from app.services.notifications import Notifier
 from app.trading.engine import TradeExecutor, TradingEngine
-from app.trading.enhanced_engine import get_enhanced_engine
-from app.trading.capital_preservation_strategy import get_capital_preservation_strategy
 from app.models.trading import AutoTradingConfig, TradePosition
 from app.trading.market_selector import MarketSelector
-from app.trading.breakout_strategy import BreakoutTradingStrategy
-from app.trading.personas import PersonaManager
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 # 전역 인스턴스
 market_selector = MarketSelector(top_k=5, min_volume=50_000_000_000)  # v6.0: Top 5 대형주만
-breakout_strategy = BreakoutTradingStrategy()
 
 # v6.0: 일일 손실/거래 횟수 추적 (자본 보존 안전장치)
 _daily_pnl_krw: float = 0.0  # 일일 손익 (KRW)
@@ -103,102 +96,95 @@ async def _run_capital_preservation_cycle(
     multi_tf_data_dict: dict,
     account_info: dict,
 ) -> None:
-    """Execute the new capital-preservation-first strategy path."""
-    from app.trading.engine import TradeDecisionResult
-    import pandas as pd
+    """Deprecated path retained for backward compatibility. No-op."""
+    logger.info("Capital preservation strategy path is deprecated; using LLM auto path.")
+    return
 
-    strategy = get_capital_preservation_strategy()
+
+async def _run_llm_autotrading_cycle(
+    db: Session,
+    engine: TradingEngine,
+    executor: TradeExecutor,
+    markets: list[str],
+    multi_tf_data_dict: dict,
+    account_info: dict,
+) -> None:
+    """Single-path LLM-driven auto trading cycle."""
+    from app.trading.engine import TradeDecisionResult
 
     for market in markets:
         try:
             market_tf_data = multi_tf_data_dict.get(market, {})
-            d1h = market_tf_data.get("minute60", [])
-            d15 = market_tf_data.get("minute15", [])
-            d5 = market_tf_data.get("minute5", [])
-
-            if len(d1h) < 80 or len(d15) < 80 or len(d5) < 50:
-                logger.debug("[%s] skipped: not enough candles", market)
+            market_data = market_tf_data.get("minute60", [])
+            if len(market_data) < 150:
+                logger.warning("Insufficient data for %s: %s rows", market, len(market_data))
                 continue
 
-            df_1h = pd.DataFrame(d1h)
-            df_15m = pd.DataFrame(d15)
-            df_5m = pd.DataFrame(d5)
+            features = build_features_from_market_data(market_data, market)
+            decision = await engine.decide(db, market, features, account_info)
 
-            for frame in (df_1h, df_15m, df_5m):
-                if "index" in frame.columns:
-                    frame.drop(columns=["index"], inplace=True)
-
-            current_pos = db.query(TradePosition).filter(
-                TradePosition.market == market,
-                TradePosition.status == "OPEN"
-            ).first()
-
-            has_position = current_pos is not None
-            decision_result = strategy.analyze(
-                market=market,
-                df_1h=df_1h,
-                df_15m=df_15m,
-                df_5m=df_5m,
-                has_position=has_position,
-            )
-
-            action = decision_result.action
-
-            # Buy guardrails are enforced here; sells are always allowed.
-            if action == "BUY":
+            if decision.action == "BUY":
                 trading_ok, reason = _is_trading_allowed()
                 if not trading_ok:
-                    logger.warning("[%s] BUY blocked: %s", market, reason)
-                    action = "HOLD"
-                elif account_info["open_positions"] >= settings.max_open_positions:
-                    logger.info("[%s] BUY blocked: max open positions", market)
-                    action = "HOLD"
-                elif decision_result.confidence < settings.min_confidence_for_trade:
+                    logger.warning("⛔ %s BUY blocked: %s", market, reason)
+                    continue
+                if account_info["open_positions"] >= settings.max_open_positions:
                     logger.info(
-                        "[%s] BUY blocked: low confidence %.1f%%",
+                        "⏸️ %s BUY skipped: max positions reached (%s/%s)",
                         market,
-                        decision_result.confidence * 100,
+                        account_info["open_positions"],
+                        settings.max_open_positions,
                     )
-                    action = "HOLD"
+                    continue
+                if decision.confidence < settings.min_confidence_for_trade:
+                    logger.info(
+                        "⏸️ %s BUY skipped: confidence %.1f%% < %.1f%%",
+                        market,
+                        decision.confidence * 100,
+                        settings.min_confidence_for_trade * 100,
+                    )
+                    continue
 
-            if action == "BUY" and has_position:
-                action = "HOLD"
-
-            if action == "SELL" and not has_position:
-                action = "HOLD"
-
-            if action == "HOLD":
+            if decision.action == "HOLD":
+                logger.info("⏸️ %s: HOLD - %s", market, decision.rationale[:120])
                 continue
 
-            investment_ratio = decision_result.investment_ratio
-            if action == "SELL":
-                investment_ratio = 1.0
+            if decision.action == "BUY":
+                decision = TradeDecisionResult(
+                    approved=True,
+                    action="BUY",
+                    market=decision.market,
+                    confidence=decision.confidence,
+                    rationale=f"LLM Auto: {decision.rationale}",
+                    emergency=decision.emergency,
+                    investment_ratio=min(decision.investment_ratio, settings.max_investment_ratio),
+                    max_loss_acceptable=decision.max_loss_acceptable,
+                    take_profit_target=decision.take_profit_target,
+                )
             else:
-                investment_ratio = min(investment_ratio, settings.max_investment_ratio)
+                decision = TradeDecisionResult(
+                    approved=True,
+                    action="SELL",
+                    market=decision.market,
+                    confidence=decision.confidence,
+                    rationale=f"LLM Auto: {decision.rationale}",
+                    emergency=decision.emergency,
+                    investment_ratio=1.0,
+                    max_loss_acceptable=decision.max_loss_acceptable,
+                    take_profit_target=decision.take_profit_target,
+                )
 
-            decision = TradeDecisionResult(
-                approved=True,
-                action=action,
-                market=market,
-                confidence=decision_result.confidence,
-                rationale=f"CapitalPreservation: {decision_result.rationale}",
-                emergency=False,
-                investment_ratio=investment_ratio,
-                max_loss_acceptable=decision_result.stop_loss_pct,
-                take_profit_target=decision_result.take_profit_pct,
-            )
             executor.execute(db, decision, account_info["available_balance"])
             logger.info(
-                "CapitalPreservation %s %s conf=%.1f%% sl=%.2f%% tp=%.2f%%",
+                "🤖 LLM Auto %s %s (conf %.1f%%, ratio %.1f%%)",
                 market,
-                action,
-                decision_result.confidence * 100,
-                decision_result.stop_loss_pct * 100,
-                decision_result.take_profit_pct * 100,
+                decision.action,
+                decision.confidence * 100,
+                decision.investment_ratio * 100,
             )
 
         except Exception as e:
-            logger.error(f"CapitalPreservation cycle error for {market}: {e}", exc_info=True)
+            logger.error("LLM auto cycle error for %s: %s", market, e, exc_info=True)
             continue
 
 
@@ -225,12 +211,16 @@ async def check_and_manage_positions(db: Session, executor: TradeExecutor) -> No
     try:
         await asyncio.sleep(0.5) 
         
-        current_prices = pyupbit.get_current_price(markets)
-        if isinstance(current_prices, (float, int)):
-            current_prices = {markets[0]: current_prices}
-        elif current_prices is None:
+        current_prices_raw = pyupbit.get_current_price(cast(Any, markets))
+        if isinstance(current_prices_raw, (float, int)):
+            current_prices = {markets[0]: float(current_prices_raw)}
+        elif isinstance(current_prices_raw, dict):
+            current_prices = {k: float(v) for k, v in current_prices_raw.items()}
+        elif current_prices_raw is None:
             logger.error("Failed to fetch current prices for position check")
             return
+        else:
+            current_prices = {}
             
         for pos in positions:
             market = pos.market
@@ -392,6 +382,7 @@ async def run_cycle() -> None:
     # [Improvement] 보유 중인 코인도 분석 대상에 포함
     balances = []
     held_tickers = []
+    db: Session | None = None
     try:
         upbit = pyupbit.Upbit(settings.upbit_access_key, settings.upbit_secret_key)
         balances = upbit.get_balances()
@@ -433,14 +424,18 @@ async def run_cycle() -> None:
         total_value = krw_balance
         
         # DB 세션 미리 생성
-        db: Session = SessionLocal()
+        db = SessionLocal()
         
         # 현재가 조회 (보유 코인 가치 계산 및 포지션 동기화용)
         if held_tickers:
-            current_prices = pyupbit.get_current_price(held_tickers)
-            if isinstance(current_prices, (float, int)):
-                current_prices = {held_tickers[0]: current_prices}
-            elif current_prices is None:
+            current_prices_raw = pyupbit.get_current_price(cast(Any, held_tickers))
+            if isinstance(current_prices_raw, (float, int)):
+                current_prices = {held_tickers[0]: float(current_prices_raw)}
+            elif isinstance(current_prices_raw, dict):
+                current_prices = {k: float(v) for k, v in current_prices_raw.items()}
+            elif current_prices_raw is None:
+                current_prices = {}
+            else:
                 current_prices = {}
         else:
             current_prices = {}
@@ -514,233 +509,43 @@ async def run_cycle() -> None:
     except Exception as e:
         logger.error(f"Failed to process account info: {e}")
         # db 세션 닫기
-        if 'db' in locals(): db.close()
+        if db is not None:
+            db.close()
         return
 
     engine = TradingEngine(settings)
     executor = TradeExecutor(settings)
     
-    # Enhanced Engine (Hybrid + MultiTF) 사용
-    enhanced_engine = get_enhanced_engine()
-
-    db: Session = SessionLocal()
+    db = SessionLocal()
     try:
         # 1. 기존 포지션 관리 (Stop Loss / Take Profit)
         await check_and_manage_positions(db, executor)
 
-        if settings.use_capital_preservation_strategy:
-            await _run_capital_preservation_cycle(
+        if settings.llm_autotrading_enabled:
+            await _run_llm_autotrading_cycle(
                 db=db,
+                engine=engine,
                 executor=executor,
                 markets=markets,
                 multi_tf_data_dict=multi_tf_data_dict,
                 account_info=account_info,
             )
             return
-        
+
+        # Fallback branch: keep single decision engine even if llm_autotrading_enabled is disabled.
         for market in markets:
             try:
-                # 시장 데이터를 ML 입력 특징으로 변환
                 market_tf_data = multi_tf_data_dict.get(market, {})
                 market_data = market_tf_data.get('minute60', [])
-                
                 if len(market_data) < 150:
-                    logger.warning(f"Insufficient data for {market}: {len(market_data)} rows (need 150+)")
                     continue
-                
-                # Enhanced Engine 사용 가능 여부 확인
-                if enhanced_engine.is_available():
-                    # market_data를 DataFrame으로 변환
-                    import pandas as pd
-                    df = pd.DataFrame(market_data)
-                    
-                    # 'index' 컬럼 제거 (pyupbit reset_index()에서 추가된 불필요한 컬럼)
-                    if 'index' in df.columns:
-                        df = df.drop(columns=['index'])
-                        logger.debug(f"Removed 'index' column from {market} market data")
-                    
-                    # 기술적 지표 추가 (CRITICAL FIX for RL Agent & Hybrid Engine)
-                    try:
-                        df = calculate_technical_indicators(df)
-                        # NaN 값 처리 (앞부분 데이터 부족으로 인한 NaN은 제거하거나 채움)
-                        df = df.bfill().ffill().fillna(0)
-                    except Exception as e:
-                        logger.error(f"Failed to calculate indicators for {market}: {e}")
-                        continue
 
-                    # Multi-timeframe 데이터 준비
-                    multi_tf_dfs = {}
-                    for interval, data in market_tf_data.items():
-                        if data:
-                            tf_df = pd.DataFrame(data)
-                            if 'index' in tf_df.columns:
-                                tf_df = tf_df.drop(columns=['index'])
-                            multi_tf_dfs[interval] = tf_df
-
-                    # Enhanced Engine으로 거래 신호 생성 (Hybrid + MultiTF)
-                    action, confidence, details = enhanced_engine.get_enhanced_signal(market, df, multi_tf_data=multi_tf_dfs)
-                    
-                    # [Persona Strategy Integration] v6.0: 매도 거부권만 유지, 매수 오버라이드 제거
-                    try:
-                        persona_mgr = PersonaManager()
-                        p_decisions = persona_mgr.evaluate_all(market, df)
-                        
-                        # [Dashboard Update] Save Persona Analysis to Redis
-                        try:
-                            rd = get_redis_client()
-                            if rd:
-                                rd.hset("persona_status", market, json.dumps(p_decisions))
-                        except Exception as re:
-                            logger.error(f"Redis save failed: {re}")
-                        
-                        best_sell = max([d for d in p_decisions if d['action'] == 'SELL'], key=lambda x: x['confidence'], default=None)
-                        
-                        # v6.0: 페르소나 매수 오버라이드 완전 제거 (FOMO 방지)
-                        # HOLD는 HOLD로 유지. 엔진이 확신할 때만 매수.
-                        
-                        if action == "HOLD" and best_sell and best_sell['confidence'] >= 0.7:
-                            # 매도 신호가 있으면 HOLD를 SELL로 전환 (리스크 관리만)
-                            action = "SELL"
-                            confidence = best_sell['confidence']
-                            details['rationale'] = f"Persona Risk Exit ({best_sell['persona']}): {best_sell['reason']}"
-                            logger.info(f"🎭 Persona Risk Exit: {market} by {best_sell['persona']}")
-                                
-                        elif action == "BUY":
-                            # v6.0: 매수 신호가 떴을 때 페르소나 매도 거부권 강화 (0.85→0.70)
-                            if best_sell and best_sell['confidence'] >= 0.70:
-                                action = "HOLD"
-                                details['rationale'] = f"Persona Veto ({best_sell['persona']}): {best_sell['reason']}"
-                                logger.warning(f"🎭 Persona Veto: Blocking BUY for {market} due to {best_sell['persona']}")
-                                
-                    except Exception as pe:
-                        logger.error(f"Persona evaluation failed for {market}: {pe}")
-
-                    # [Trend Review] v6.0: 손실 -1.5%에서 즉시 청산 (기존 -3%)
-                    current_pos = db.query(TradePosition).filter(
-                        TradePosition.market == market,
-                        TradePosition.status == "OPEN"
-                    ).first()
-
-                    if current_pos and (action == "HOLD" or (action == "BUY" and confidence < 0.75)):
-                        try:
-                            current_price = df.iloc[-1]['close']
-                            entry_price = current_pos.entry_price
-                            if entry_price > 0:
-                                pnl_pct = (current_price - entry_price) / entry_price
-                                
-                                # v6.0: -1.5% 이상 손실 + 강한 상승 추세 아님 → 즉시 청산
-                                if pnl_pct < -0.015:
-                                    logger.info(f"📉 Trend Review: {market} PnL {pnl_pct:.2%} & Signal is {action}({confidence:.2f}). Cutting Loss.")
-                                    action = "SELL"
-                                    confidence = 0.95
-                                    details['rationale'] = f"v6.0 Trend Review: Loss ({pnl_pct:.1%}) without strong uptrend."
-                        except Exception as e:
-                            logger.error(f"Error reviewing trend for {market}: {e}")
-
-                    if action != "HOLD":
-                        # v6.0: 자본 보존 안전장치 체크 (매수만 차단, 매도는 항상 허용)
-                        if action == "BUY":
-                            trading_ok, reason = _is_trading_allowed()
-                            if not trading_ok:
-                                logger.warning(f"⛔ {market} BUY blocked: {reason}")
-                                action = "HOLD"
-                            
-                            # v6.0: 최소 신뢰도 체크 (75% 이상만 매수)
-                            elif confidence < settings.min_confidence_for_trade:
-                                logger.info(f"⏸️ {market} BUY skipped: confidence {confidence:.1%} < {settings.min_confidence_for_trade:.1%}")
-                                action = "HOLD"
-                            
-                            # v6.0: 최대 포지션 수 체크
-                            elif account_info["open_positions"] >= settings.max_open_positions:
-                                logger.info(f"⏸️ {market} BUY skipped: max positions reached ({account_info['open_positions']}/{settings.max_open_positions})")
-                                action = "HOLD"
-                        
-                    if action != "HOLD":
-                        # v6.0: 보수적 투자 비율 (기존의 절반 이하)
-                        if confidence >= 0.90:
-                            investment_ratio = 0.25  # 최고: 25% (기존 40%)
-                        elif confidence >= 0.85:
-                            investment_ratio = 0.20  # 높음: 20% (기존 30%)
-                        elif confidence >= 0.80:
-                            investment_ratio = 0.15  # 양호: 15% (기존 25%)
-                        elif confidence >= 0.75:
-                            investment_ratio = 0.10  # 최소: 10% (기존 15%)
-                        else:
-                            investment_ratio = 0.07  # 관망: 7%
-                        
-                        # 절대 상한 적용
-                        investment_ratio = min(investment_ratio, settings.max_investment_ratio)
-                        
-                        # SELL은 전량 매도
-                        if action == "SELL":
-                            investment_ratio = 1.0
-                        
-                        # v6.0: SL/TP 고정 (ATR 과신 방지, 확실한 손익비 1:2)
-                        stop_loss_pct = 0.015   # -1.5% 고정
-                        take_profit_pct = 0.03  # +3.0% 고정
-                        
-                        # ATR 기반 미세 조정 (SL은 더 좁힐 수는 있지만 넓힐 수 없음)
-                        atr = df.iloc[-1].get('atr', 0)
-                        current_price = df.iloc[-1].get('close', 0)
-                        if atr > 0 and current_price > 0:
-                            atr_based_sl = min((atr * 1.0 / current_price), 0.015)  # ATR 1배, 최대 1.5%
-                            atr_based_tp = min((atr * 2.5 / current_price), 0.05)    # ATR 2.5배, 최대 5%
-                            stop_loss_pct = max(atr_based_sl, 0.008)  # 최소 0.8%
-                            take_profit_pct = max(atr_based_tp, 0.025)  # 최소 2.5%
-                            
-                            # v6.0: 손익비 최소 1:1.5 보장
-                            if take_profit_pct / stop_loss_pct < 1.5:
-                                take_profit_pct = stop_loss_pct * 2.0
-                        
-                        # TradeDecisionResult 생성
-                        from app.trading.engine import TradeDecisionResult
-                        decision = TradeDecisionResult(
-                            approved=True,
-                            action=action,
-                            market=market,
-                            confidence=confidence,
-                            rationale=f"Enhanced Engine: {details.get('rationale', 'Multi-layer signal')}",
-                            emergency=False,
-                            investment_ratio=investment_ratio,
-                            max_loss_acceptable=stop_loss_pct,
-                            take_profit_target=take_profit_pct,
-                        )
-                        
-                        logger.info(f"🚀 Enhanced: {market} {action} ({confidence:.1%}) SL:{stop_loss_pct:.1%}/TP:{take_profit_pct:.1%} - {details.get('rationale', '')[:60]}")
-                    else:
-                        # HOLD 신호
-                        from app.trading.engine import TradeDecisionResult
-                        decision = TradeDecisionResult(
-                            approved=False,
-                            action="HOLD",
-                            market=market,
-                            confidence=confidence,
-                            rationale=details.get('rationale', 'Enhanced Engine: No strong signal'),
-                            emergency=False,
-                            investment_ratio=0.0,
-                            max_loss_acceptable=0.015,
-                            take_profit_target=0.03,
-                        )
-                        logger.debug(f"⏸️ Enhanced: {market} HOLD ({confidence:.1%})")
-                else:
-                    # Enhanced Engine 사용 불가 시 기존 ML 방식 사용
-                    # 특징 생성
-                    features = build_features_from_market_data(market_data, market)
-                    
-                    # 거래 결정
-                    decision = await engine.decide(db, market, features, account_info)
-                    
-                    # 결정 로깅
-                    if decision.approved:
-                        logger.info(f"📝 {market}: {decision.action} (투자비율: {decision.investment_ratio*100:.0f}%) - {decision.rationale[:100]}")
-                    else:
-                        logger.info(f"⏸️ {market}: HOLD - {decision.rationale[:100]}")
-                
-                # 거래 실행
-                executor.execute(db, decision, account_info["available_balance"])
-                
+                features = build_features_from_market_data(market_data, market)
+                decision = await engine.decide(db, market, features, account_info)
+                if decision.approved:
+                    executor.execute(db, decision, account_info["available_balance"])
             except Exception as e:
-                logger.error(f"Error processing {market}: {e}", exc_info=True)
+                logger.error("Error processing %s: %s", market, e, exc_info=True)
                 continue
     finally:
         db.close()
@@ -895,118 +700,8 @@ async def run_tick_cycle() -> None:
     v6.0: 비활성화 - aggressive_trading_mode=False
     ML 신호만으로 검증 없이 매매하는 것이 주요 손실 원인이었음
     """
-    if not settings.aggressive_trading_mode:
-        logger.debug("⛔ Tick trading disabled (v6.0: aggressive_trading_mode=False)")
-        return
-    
-    logger.debug("🚀 Starting tick trading cycle")
-    
-    db: Session = SessionLocal()
-    try:
-        # 자동매매 활성화 여부 확인
-        config = db.query(AutoTradingConfig).order_by(AutoTradingConfig.id.desc()).first()
-        if not config or not config.is_active:
-            logger.debug("Auto trading is not active, skipping tick cycle")
-            return
-        
-        # Upbit 계정 정보 가져오기
-        upbit = pyupbit.Upbit(settings.upbit_access_key, settings.upbit_secret_key)
-        balances = upbit.get_balances()
-        krw_balance = float(upbit.get_balance("KRW") or 0)  # type: ignore
-        
-        # 현재 포지션 수 확인
-        open_positions = len([b for b in balances if b['currency'] != 'KRW'])
-        
-        # 최대 포지션 수 제한 체크
-        if open_positions >= settings.tick_max_positions:
-            logger.debug(f"Max positions reached ({open_positions}/{settings.tick_max_positions}), skipping tick cycle")
-            return
-        
-        # 원금과 현재 자산 계산
-        total_value = krw_balance
-        for balance in balances:
-            if balance['currency'] != 'KRW':
-                ticker = f"KRW-{balance['currency']}"
-                current_price = pyupbit.get_current_price(ticker)
-                if current_price and isinstance(current_price, (int, float)):
-                    total_value += float(balance['balance']) * float(current_price)
-        
-        account_info = {
-            "principal": total_value,
-            "available_balance": krw_balance,
-            "open_positions": open_positions,
-            "avg_return": 0.0,
-            "consecutive_losses": 0,
-        }
-        
-        markets = settings.tracked_markets
-        data_service = HistoricalDataService(markets)
-        
-        # 최근 데이터 가져오기 (짧은 시퀀스 사용)
-        market_data_dict = await data_service.fetch_recent()
-        
-        engine = TradingEngine(settings)
-        executor = TradeExecutor(settings)
-        
-        for market in markets:
-            try:
-                market_data = market_data_dict.get(market, [])
-                
-                if len(market_data) < 150:
-                    logger.debug(f"Insufficient data for {market}: {len(market_data)} rows")
-                    continue
-                
-                # 특징 생성
-                features = build_features_from_market_data(market_data, market)
-                
-                # ML 신호만 사용 (LLM 검증 없이)
-                ml_signal = engine.predictor.infer({"market": market, **features})
-                
-                # 최소 신뢰도 체크
-                confidence = max(ml_signal.buy_probability, ml_signal.sell_probability)
-                if confidence < settings.tick_min_confidence:
-                    logger.debug(f"{market} tick skip: confidence {confidence:.1%} < {settings.tick_min_confidence:.1%}")
-                    continue
-                
-                # 신뢰도 기반 투자 비율 (더 공격적)
-                if confidence >= 0.85:
-                    investment_ratio = 0.5  # 매우 높은 신뢰도: 50%
-                elif confidence >= 0.75:
-                    investment_ratio = 0.3  # 높은 신뢰도: 30%
-                else:
-                    investment_ratio = 0.15  # 중간 신뢰도: 15%
-                
-                # SELL 신호는 항상 전량 매도
-                if ml_signal.action == "SELL":
-                    investment_ratio = 1.0
-                
-                # 거래 결정 생성 (LLM 승인 없이)
-                from app.trading.engine import TradeDecisionResult
-                decision = TradeDecisionResult(
-                    approved=(ml_signal.action != "HOLD"),
-                    action=ml_signal.action,
-                    market=market,
-                    confidence=confidence,
-                    rationale=f"🚀 Tick trading: ML {confidence:.1%} confidence (no LLM)",
-                    emergency=False,
-                    investment_ratio=investment_ratio,
-                    max_loss_acceptable=0.02,  # 더 타이트한 손절
-                    take_profit_target=0.03,  # 더 빠른 익절
-                )
-                
-                # 거래 실행
-                if decision.approved:
-                    executor.execute(db, decision, account_info["available_balance"])
-                    logger.info(f"⚡ Tick trade: {market} {ml_signal.action} at {confidence:.1%} confidence, {investment_ratio*100:.0f}% position")
-                
-            except Exception as e:
-                logger.error(f"Error in tick trading for {market}: {e}", exc_info=True)
-                continue
-                
-    except Exception as e:
-        logger.error(f"Error in tick trading cycle: {e}", exc_info=True)
-    finally:
-        db.close()
+    logger.info("Tick trading legacy path retired. Using LLM auto trading path only.")
+    return
 
 
 async def run_pump_detection_loop() -> None:
@@ -1015,292 +710,6 @@ async def run_pump_detection_loop() -> None:
     v6.0: 비활성화 - pump_detection_enabled=False
     급등 매수(FOMO)가 대규모 손실의 핵심 원인이었음
     """
-    if not settings.pump_detection_enabled:
-        logger.debug("⛔ Pump detection disabled (v6.0: pump_detection_enabled=False)")
-        return
-
-    import time
-    from app.trading.pump_predictor import PumpPredictor  # v5.0: 신규 예측기
-    from app.trading.pump_detector import PumpDetector  # 레거시 호환
-    from app.trading.reversal_strategy import ReversalTradingStrategy
-    from app.trading.engine import TradeDecisionResult
-    from app.models.trading import AutoTradingConfig
-    
-    # breakout_strategy는 전역 변수 사용
-
-    db = SessionLocal()
-    
-    # 0. 전략 모드 확인
-    try:
-        config_obj = db.query(AutoTradingConfig).order_by(AutoTradingConfig.id.desc()).first()
-        # 기본값: breakout_strategy
-        strategy_mode = getattr(config_obj, "strategy_option", "breakout_strategy")
-        if not strategy_mode or strategy_mode == "reversal_strategy": 
-            # 사용자 요청으로 Reversal -> Breakout 강제 전환 (또는 Config가 없을 때)
-            strategy_mode = "breakout_strategy"
-            
-    except Exception as e:
-        logger.error(f"Failed to load strategy config: {e}")
-        strategy_mode = "breakout_strategy"
-
-    logger.info(f"🚀 Starting Real-time Monitoring Loop v5.0: Mode={strategy_mode} (55s)")
-    
-    # v5.0: PumpPredictor 사용 (급등 조짐 + 피크 감지)
-    pump_predictor = PumpPredictor()
-    detector = None  # 레거시
-    reversal_strategy = None
-    
-    # 동적 마켓 사용
-    markets = market_selector.get_top_volume_coins()
-    
-    # 전략 초기화
-    if strategy_mode == "momentum_strategy":
-        detector = PumpDetector()  # 레거시 호환
-    elif strategy_mode == "reversal_strategy":
-        reversal_strategy = ReversalTradingStrategy(settings)
-    # BreakoutStrategy는 전역 인스턴스 사용
-
-    start_time = time.time()
-    
-    # 전략용 데이터 캐시 (시작 시 1회 로드)
-    # Breakout 및 Reversal 모두 과거 데이터 필요
-    cached_dfs = {}
-    if strategy_mode in ["reversal_strategy", "breakout_strategy"]:
-        try:
-            logger.info(f"loading historical data for {strategy_mode}...")
-            for m in markets:
-                # API 호출 속도 제한 고려
-                df = pyupbit.get_ohlcv(m, interval="minute1", count=200)
-                if df is not None:
-                    cached_dfs[m] = df
-                time.sleep(0.05) 
-        except Exception as e:
-            logger.warning(f"Initial data load failed: {e}")
-
-    executor = TradeExecutor(settings)
-    
-    try:
-        # 1. 현재 오픈된 포지션 로드
-        open_positions = db.query(TradePosition).filter(TradePosition.status == "OPEN").all()
-        monitored_positions = {p.market: p for p in open_positions}
-        
-        # WebSocket 연결 (Async direct implementation)
-        import websockets
-        import json
-        uri = "wss://api.upbit.com/websocket/v1"
-        subscribe_fmt = [{"ticket": "UNIQUE_TICKET"}, {"type": "ticker", "codes": markets, "isOnlyRealtime": True}]
-        
-        websocket = await websockets.connect(uri)
-        await websocket.send(json.dumps(subscribe_fmt))
-        
-        while time.time() - start_time < 55:
-            try:
-                msg = await asyncio.wait_for(websocket.recv(), timeout=1.0)
-                data = json.loads(msg)
-            except asyncio.TimeoutError:
-                continue
-            except Exception as e:
-                logger.error(f"WS Recv Error: {e}")
-                break
-                
-            market = data.get('code')
-            if not market: continue
-            price = float(data.get('trade_price'))
-            volume = float(data.get('acc_trade_price_24h'))
-            
-            # --- [A] v5.0 개선: 실시간 트레일링 스탑 + SL/TP ---
-            if market in monitored_positions:
-                pos = monitored_positions[market]
-                
-                # 1. 기존 Stop Loss
-                if price <= pos.stop_loss:
-                    logger.warning(f"🛑 Real-time Stop Loss: {market} {price}")
-                    decision = TradeDecisionResult(True, "SELL", market, 1.0, "Real-time Stop Loss", True, 1.0)
-                    executor.execute(db, decision)
-                    pump_predictor.clear_position(market)  # v5.0: 포지션 추적 초기화
-                    del monitored_positions[market]
-                    continue
-                    
-                # 2. 기존 Take Profit
-                elif price >= pos.take_profit:
-                    logger.info(f"💰 Real-time Take Profit: {market} {price}")
-                    decision = TradeDecisionResult(True, "SELL", market, 1.0, "Real-time Take Profit", False, 1.0)
-                    executor.execute(db, decision)
-                    pump_predictor.clear_position(market)  # v5.0: 포지션 추적 초기화
-                    del monitored_positions[market]
-                    continue
-                
-                # 3. v5.0 신규: 트레일링 스탑 + 피크 감지
-                df = cached_dfs.get(market)
-                peak_signal = pump_predictor.detect_peak(
-                    market, price, pos.entry_price, volume,
-                    rsi=df.iloc[-1].get('rsi', 50) if df is not None and len(df) > 0 else None
-                )
-                if peak_signal and peak_signal.action == "SELL":
-                    logger.info(f"🔔 Peak Detected: {market} - {peak_signal.reason}")
-                    decision = TradeDecisionResult(
-                        True, "SELL", market, peak_signal.confidence,
-                        f"Peak Sell: {peak_signal.reason}", False, 1.0
-                    )
-                    executor.execute(db, decision)
-                    pump_predictor.clear_position(market)
-                    del monitored_positions[market]
-                    continue
-
-            # --- [B] 전략별 진입/청산 로직 ---
-            
-            # Option 1: Momentum (Pump) - v5.0 개선
-            if strategy_mode == "momentum_strategy":
-                df = cached_dfs.get(market)
-                if df is None:
-                    continue
-                
-                # v5.0: PumpPredictor로 급등 조짐 사전 감지
-                has_position = market in monitored_positions
-                entry_price = monitored_positions[market].entry_price if has_position else 0
-                
-                signal = pump_predictor.analyze(
-                    market, df, price, volume,
-                    has_position=has_position,
-                    entry_price=entry_price
-                )
-                
-                if signal.action == "BUY" and signal.signal_type == "PRE_PUMP":
-                    if market not in monitored_positions:
-                        logger.warning(f"🚀 PRE-PUMP 감지: {market} - {signal.reason}")
-                        
-                        existing = db.query(TradePosition).filter(
-                            TradePosition.market==market, 
-                            TradePosition.status=="OPEN"
-                        ).first()
-                        if existing:
-                            monitored_positions[market] = existing
-                            continue
-                        
-                        decision = TradeDecisionResult(
-                            True, "BUY", market, signal.confidence, 
-                            f"Pre-Pump: {signal.reason}", False, 
-                            settings.pump_investment_ratio,
-                            max_loss_acceptable=0.02,  # 타이트한 SL
-                            take_profit_target=0.08    # 8% 목표 (급등 기대)
-                        )
-                        executor.execute(db, decision, None)
-                        
-                elif signal.action == "SELL" and signal.signal_type == "PEAK":
-                    if market in monitored_positions:
-                        logger.info(f"🔔 PEAK 매도: {market} - {signal.reason}")
-                        decision = TradeDecisionResult(
-                            True, "SELL", market, signal.confidence, 
-                            f"Peak Detected: {signal.reason}", False, 1.0
-                        )
-                        executor.execute(db, decision)
-                        pump_predictor.clear_position(market)
-                        del monitored_positions[market]
-
-            # Option 2: Reversal (Peak Sell, Dip Buy)
-            elif strategy_mode == "reversal_strategy" and reversal_strategy:
-                df = cached_dfs.get(market)
-                if df is None: continue
-                
-                action, conf, reason = reversal_strategy.analyze(market, price, df)
-                
-                if action == "SELL":
-                    if market in monitored_positions:
-                        logger.info(f"📉 PEAK SELL Signal for {market}: {reason}")
-                        decision = TradeDecisionResult(
-                            True, "SELL", market, conf, 
-                            f"Reversal Peak Sell: {reason}", False, 1.0
-                        )
-                        executor.execute(db, decision)
-                        del monitored_positions[market]
-                        
-                elif action == "BUY":
-                    if market not in monitored_positions:
-                        existing = db.query(TradePosition).filter(TradePosition.market==market, TradePosition.status=="OPEN").first()
-                        if existing:
-                            monitored_positions[market] = existing
-                            continue
-
-                        decision = TradeDecisionResult(
-                            True, "BUY", market, conf, 
-                            f"Reversal Dip Buy: {reason}", False, 
-                            settings.pump_investment_ratio, 
-                            max_loss_acceptable=0.03, 
-                            take_profit_target=0.03
-                        )
-                        executor.execute(db, decision, None)
-
-            # Option 3: Breakout Strategy (Trend Following) - NEW
-            elif strategy_mode == "breakout_strategy":
-                df = cached_dfs.get(market)
-                # 데이터 갱신 (마지막 row의 close price 정도만 업데이트 해주는게 좋지만, 여기선 근사치 사용)
-                # 더 정확하게 하려면 DataFrame의 마지막 Row를 현재가/거래량으로 업데이트 해야함.
-                if df is None: continue
-                
-                # Real-time data injection (Update last candle temporarily)
-                # 간단하게 현재가 반영을 위해 copy 후 수정
-                # (빈번한 copy는 성능 이슈가 있지만 5분주기+WS조합이므로 1초에 수십건 아니면 괜찮음)
-                # 하지만 Python DataFrame copy는 꽤 무거움. 
-                # 전략이 '종가' 기준이 많으므로 현재가가 종가라고 가정하고 분석 Execute.
-                
-                # BreakoutStrategy.analyze는 DataFrame 전체를 보므로, 
-                # 마지막 캔들의 Close를 현재가로 덮어쓰거나, 새로운 캔들을 임시로 추가해야 함.
-                # 편의상 '현재 캔들'이 아직 완성되지 않았지만 현재가로 형성중이라고 가정.
-                
-                # df.iloc[-1, df.columns.get_loc('close')] = price (SettingWithCopyWarning 주의)
-                # 여기서는 원본 df 손상 방지를 위해 복사본 없이 analyze 내에서 처리하거나,
-                # 그냥 직전 확정 캔들 + 현재가 별도 전달이 나음.
-                # 하지만 BreakoutStrategy.analyze 인터페이스는 market, df 임.
-                # BreakoutStrategy 내부에서 df.iloc[-1]을 참조하므로,
-                # 여기서 df의 마지막 row를 업데이트해서 넘겨줘야 실시간 반영됨.
-                pass 
-                # (TODO: Optimize DataFrame update)
-                
-                # 일단 단순하게, df는 1분 전 데이터이므로 실시간 급등 반영이 늦을 수 있음.
-                # 따라서 BreakoutStrategy를 'Current Price'를 인자로 받도록 수정하거나
-                # 여기서 약간의 트릭 사용.
-                
-                # -> BreakoutStrategy를 수정하지 않고, 여기서 df를 살짝 수정해서 넘김
-                # (Warning ignore)
-                last_idx = df.index[-1]
-                df.at[last_idx, 'close'] = price
-                # 거래량은 누적이므로 API가 주는 누적거래량이 24h라 캔들 볼륨과 다름.
-                # 캔들 볼륨 추정 불가하므로 이전 볼륨 그대로 사용하되, 가격 돌파 위주로 봄.
-                
-                bo_action, bo_conf, bo_reason = breakout_strategy.analyze(market, df)
-                
-                if bo_action == "BUY":
-                    if market not in monitored_positions:
-                        logger.info(f"🚀 BREAKOUT BUY: {market} {bo_conf:.1%} - {bo_reason}")
-                        
-                        existing = db.query(TradePosition).filter(TradePosition.market==market, TradePosition.status=="OPEN").first()
-                        if existing:
-                            monitored_positions[market] = existing
-                            continue
-                            
-                        decision = TradeDecisionResult(
-                            True, "BUY", market, bo_conf, 
-                            f"Trend Breakout: {bo_reason}", False, 
-                            0.2, # 20% investment
-                            max_loss_acceptable=0.02, # -2% SL (Trend following usually tight SL)
-                            take_profit_target=0.05   # +5% TP (Let profits run)
-                        )
-                        executor.execute(db, decision, None)
-                
-                elif bo_action == "SELL":
-                     if market in monitored_positions:
-                        logger.info(f"📉 TREND BROKEN: {market} - {bo_reason}")
-                        decision = TradeDecisionResult(
-                            True, "SELL", market, bo_conf, 
-                            f"Trend Broken: {bo_reason}", False, 1.0
-                        )
-                        executor.execute(db, decision)
-                        del monitored_positions[market]
-                        
-        await websocket.close()
-            
-    except Exception as e:
-        logger.error(f"Error in monitoring loop: {e}")
-    finally:
-        db.close()
+    logger.info("Pump/momentum/reversal loop retired. LLM auto trading path is active.")
+    return
 
