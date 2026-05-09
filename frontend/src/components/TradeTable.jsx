@@ -3,9 +3,7 @@ function TradeTable({ trades = [], loading }) {
     <section className="panel">
       <div className="flex-between mb-4">
         <h2>Recent Activity</h2>
-        <button className="btn-primary" style={{ fontSize: '0.8rem', padding: '0.25rem 0.75rem', background: 'transparent', border: '1px solid var(--border)' }}>
-          View All
-        </button>
+        <span className="text-muted" style={{ fontSize: "0.82rem" }}>Latest 50 logs</span>
       </div>
       
       {loading ? (
@@ -18,14 +16,14 @@ function TradeTable({ trades = [], loading }) {
                 <th>Time</th>
                 <th>Market</th>
                 <th>Side</th>
-                <th>Price</th>
+                <th>Amount</th>
                 <th>Reason</th>
               </tr>
             </thead>
             <tbody>
               {trades?.length > 0 ? trades.map((trade, idx) => (
                 <tr key={trade.id || idx}>
-                  <td className="text-muted">{new Date(trade.created_at).toLocaleTimeString()}</td>
+                  <td className="text-muted">{new Date(trade.created_at).toLocaleString()}</td>
                   <td style={{ fontWeight: 600 }}>{trade.market}</td>
                   <td>
                     <span className={`badge ${trade.side === 'BUY' ? 'text-success' : 'text-danger'}`} 
@@ -33,7 +31,7 @@ function TradeTable({ trades = [], loading }) {
                       {trade.side}
                     </span>
                   </td>
-                  <td>₩{new Intl.NumberFormat('ko-KR').format(trade.price || 0)}</td>
+                  <td>₩{new Intl.NumberFormat('ko-KR').format(trade.amount || 0)}</td>
                   <td className="text-muted" style={{ fontSize: '0.85rem' }}>{trade.reason}</td>
                 </tr>
               )) : (

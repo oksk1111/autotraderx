@@ -1,5 +1,7 @@
-function MetricsGrid({ metrics, snapshot, loading }) {
+function MetricsGrid({ metrics, snapshot, autonomy, loading }) {
   if (loading) return <div className="loading mb-4">Loading metrics...</div>;
+
+  const selectedCount = autonomy?.selected_markets?.length || 0;
 
   const items = [
     { 
@@ -8,7 +10,7 @@ function MetricsGrid({ metrics, snapshot, loading }) {
       isPositive: (snapshot?.pnl_24h || 0) >= 0
     },
     { 
-      label: "Active Markets", 
+      label: "Tracked Markets", 
       value: snapshot?.active_markets?.length ?? 0 
     },
     { 
@@ -18,11 +20,19 @@ function MetricsGrid({ metrics, snapshot, loading }) {
     { 
       label: "Last Confidence", 
       value: metrics?.last_confidence ? `${(metrics.last_confidence * 100).toFixed(1)}%` : "-" 
+    },
+    {
+      label: "Autonomy Picks",
+      value: selectedCount,
+    },
+    {
+      label: "Groq Latency",
+      value: snapshot?.groq_latency_ms ? `${snapshot.groq_latency_ms}ms` : "-",
     }
   ];
 
   return (
-    <div className="grid-4">
+    <div className="grid-6">
       {items.map((item) => (
         <div key={item.label} className="stat-card">
           <div className="stat-label">{item.label}</div>

@@ -4,7 +4,7 @@ import MetricsGrid from "./MetricsGrid";
 import TradeTable from "./TradeTable";
 import AccountInfo from "./AccountInfo";
 import TradingConfigPanel from "./TradingConfigPanel";
-import PersonaPanel from "./PersonaPanel";
+import AutonomyBoard from "./AutonomyBoard";
 
 const api = axios.create({ baseURL: "/api" });
 
@@ -24,42 +24,38 @@ function DashboardPage() {
     return data;
   });
   
-  const personaQuery = useQuery(["personas"], async () => {
-    const { data } = await api.get("/dashboard/personas_status");
+  const autonomyQuery = useQuery(["autonomy"], async () => {
+    const { data } = await api.get("/dashboard/autonomy_status");
     return data;
-  }, { refetchInterval: 5000 }); // Refresh every 5s
+  }, { refetchInterval: 7000 });
 
   return (
     <div className="page">
-      <header>
+      <header className="hero-header">
         <div>
           <h1>AutoTrader X</h1>
-          <p>Autonomous Crypto Trading System</p>
+          <p>LLM Autonomous Prepositioning Desk</p>
         </div>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
           <span className="badge">LIVE</span>
+          <span className="badge secondary">NO MANUAL OVERRIDE</span>
         </div>
       </header>
 
-      {/* Top Row: Account & Config */}
       <div className="grid-2">
         <AccountInfo />
         <TradingConfigPanel />
       </div>
 
-      {/* Middle Row: Key Metrics */}
       <MetricsGrid 
         metrics={metricsQuery.data} 
         snapshot={snapshotQuery.data}
+        autonomy={autonomyQuery.data}
         loading={metricsQuery.isLoading || snapshotQuery.isLoading} 
       />
-      
-      {/* Persona Strategy Board */}
-      <div style={{ marginTop: '1.5rem' }}>
-        <PersonaPanel data={personaQuery.data} loading={personaQuery.isLoading} />
-      </div>
 
-      {/* Bottom Row: Recent Trades */}
+      <AutonomyBoard autonomy={autonomyQuery.data} loading={autonomyQuery.isLoading} />
+
       <TradeTable trades={tradesQuery.data} loading={tradesQuery.isLoading} />
     </div>
   );

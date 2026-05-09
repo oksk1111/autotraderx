@@ -22,23 +22,31 @@ function AccountInfo() {
     );
   }
 
-  const formatNumber = (num) => {
-    return new Intl.NumberFormat('ko-KR').format(Math.round(num));
-  };
+  const formatNumber = (num) => new Intl.NumberFormat("ko-KR").format(Math.round(num));
 
   const formatPercent = (num) => {
-    const sign = num >= 0 ? '+' : '';
+    const sign = num >= 0 ? "+" : "";
     return `${sign}${num.toFixed(2)}%`;
   };
+
+  const initialCapital = 300000;
+  const totalAssets = data?.total_asset_value || 0;
+  const drawdown = initialCapital > 0 ? ((totalAssets - initialCapital) / initialCapital) * 100 : 0;
 
   return (
     <div className="panel">
       <div className="flex-between mb-4">
         <h2>Account Balance</h2>
-        <span className="text-muted" style={{ fontSize: '0.85rem' }}>Updated just now</span>
+        <span className="text-muted" style={{ fontSize: "0.85rem" }}>Updated just now</span>
       </div>
+
+      {data?.api_error ? (
+        <div className="error-box">
+          Exchange API error: {JSON.stringify(data.api_error)}
+        </div>
+      ) : null}
       
-      <div className="grid-2" style={{ gap: '1rem', marginBottom: '1.5rem' }}>
+      <div className="grid-2" style={{ gap: "1rem", marginBottom: "1rem" }}>
         <div className="stat-card">
           <div className="stat-label">Available KRW</div>
           <div className="stat-value text-success">
@@ -53,38 +61,45 @@ function AccountInfo() {
         </div>
       </div>
 
+      <div className="mini-card" style={{ marginBottom: "1rem" }}>
+        <div className="stat-label">Capital Drawdown vs 300,000 KRW</div>
+        <div className={`stat-value ${drawdown >= 0 ? "text-success" : "text-danger"}`} style={{ fontSize: "1.2rem" }}>
+          {formatPercent(drawdown)}
+        </div>
+      </div>
+
       {data?.holdings && data.holdings.length > 0 ? (
         <div>
-          <h3 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '1rem', textTransform: 'uppercase' }}>
+          <h3 style={{ fontSize: "0.9rem", color: "var(--text-muted)", marginBottom: "1rem", textTransform: "uppercase" }}>
             Holdings ({data.total_positions})
           </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
             {data.holdings.map((holding) => (
               <div 
                 key={holding.market} 
                 className="stat-card"
                 style={{ 
-                  padding: '1rem',
+                  padding: "1rem",
                   borderLeft: `3px solid ${holding.profit_loss >= 0 ? 'var(--success)' : 'var(--danger)'}`
                 }}
               >
-                <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
+                <div className="flex-between" style={{ marginBottom: "0.5rem" }}>
                   <div>
-                    <span style={{ fontWeight: '700', fontSize: '1rem' }}>{holding.currency}</span>
-                    <span className="text-muted" style={{ marginLeft: '0.5rem', fontSize: '0.85rem' }}>
+                    <span style={{ fontWeight: "700", fontSize: "1rem" }}>{holding.currency}</span>
+                    <span className="text-muted" style={{ marginLeft: "0.5rem", fontSize: "0.85rem" }}>
                       {holding.amount.toFixed(4)}
                     </span>
                   </div>
-                  <div style={{ textAlign: 'right' }}>
+                  <div style={{ textAlign: "right" }}>
                     <div style={{ 
-                      fontWeight: '700',
+                      fontWeight: "700",
                       color: holding.profit_loss >= 0 ? 'var(--success)' : 'var(--danger)'
                     }}>
                       {formatPercent(holding.profit_loss_rate)}
                     </div>
                   </div>
                 </div>
-                <div className="flex-between text-muted" style={{ fontSize: '0.8rem' }}>
+                <div className="flex-between text-muted" style={{ fontSize: "0.8rem" }}>
                   <div>Avg: ₩{formatNumber(holding.avg_buy_price)}</div>
                   <div>Cur: ₩{formatNumber(holding.current_price)}</div>
                 </div>
@@ -93,7 +108,7 @@ function AccountInfo() {
           </div>
         </div>
       ) : (
-        <p className="text-muted" style={{ textAlign: 'center', padding: '1rem' }}>
+        <p className="text-muted" style={{ textAlign: "center", padding: "1rem" }}>
           No active positions
         </p>
       )}

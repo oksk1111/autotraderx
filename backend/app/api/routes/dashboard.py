@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+from typing import Any
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
  
@@ -45,9 +46,47 @@ def get_personas_status() -> dict:
     rd = get_redis_client()
     if rd:
         raw_data = rd.hgetall("persona_status")
+        if not isinstance(raw_data, dict):
+            raw_data = {}
         for market, data_str in raw_data.items():
             try:
                 result[market] = json.loads(data_str)
             except:
                 pass
     return result
+
+
+@router.get("/autonomy_status")
+def get_autonomy_status() -> dict:
+    rd = get_redis_client()
+    if not rd:
+        return {
+            "mode": "AUTONOMOUS_PREPOSITIONING",
+            "status": "redis_unavailable",
+            "selected_markets": [],
+            "candidates": [],
+        }
+
+    raw = rd.get("autonomous_strategy_status")
+    if not raw:
+        return {
+            "mode": "AUTONOMOUS_PREPOSITIONING",
+            "status": "waiting_first_cycle",
+            "selected_markets": [],
+            "candidates": [],
+        }
+
+    try:
+        payload: Any = raw
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8", errors="ignore")
+        if not isinstance(payload, str):
+            payload = str(payload)
+        return json.loads(payload)
+    except Exception:
+        return {
+            "mode": "AUTONOMOUS_PREPOSITIONING",
+            "status": "decode_error",
+            "selected_markets": [],
+            "candidates": [],
+        }

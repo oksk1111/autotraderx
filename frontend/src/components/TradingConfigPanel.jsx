@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "react-query";
 import axios from "axios";
 
@@ -6,7 +5,6 @@ const api = axios.create({ baseURL: "/api" });
 
 function TradingConfigPanel() {
   const queryClient = useQueryClient();
-  const [customCycle, setCustomCycle] = useState("");
 
   const { data: config, isLoading } = useQuery(
     ["config"],
@@ -29,12 +27,6 @@ function TradingConfigPanel() {
     }
   );
 
-  const handlePresetClick = (seconds) => {
-    if (config) {
-      updateMutation.mutate({ ...config, trading_cycle_seconds: seconds });
-    }
-  };
-
   const handleToggleActive = () => {
     if (config) {
       updateMutation.mutate({ ...config, is_active: !config.is_active });
@@ -43,21 +35,21 @@ function TradingConfigPanel() {
 
   if (isLoading) return <div className="panel loading">Loading config...</div>;
 
-  const currentCycle = config?.trading_cycle_seconds || 60;
+  const currentCycle = config?.trading_cycle_seconds || 180;
   const isActive = config?.is_active || false;
 
   return (
     <div className="panel">
       <div className="flex-between mb-4">
-        <h2>System Control</h2>
-        <div className="flex-between" style={{ gap: '1rem' }}>
-          <span className={`badge ${isActive ? 'text-success' : 'text-danger'}`} 
-                style={{ background: isActive ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', border: 'none' }}>
+        <h2>Autonomous Control</h2>
+        <div className="flex-between" style={{ gap: "1rem" }}>
+          <span className={`badge ${isActive ? "text-success" : "text-danger"}`} 
+                style={{ background: isActive ? "rgba(26, 171, 120, 0.13)" : "rgba(205, 69, 69, 0.14)", border: "none" }}>
             {isActive ? 'RUNNING' : 'STOPPED'}
           </span>
           <button 
             onClick={handleToggleActive}
-            className={isActive ? 'btn-primary' : 'btn-primary'}
+            className="btn-primary"
             style={{ background: isActive ? 'var(--danger)' : 'var(--success)' }}
           >
             {isActive ? 'Stop Trading' : 'Start Trading'}
@@ -65,29 +57,21 @@ function TradingConfigPanel() {
         </div>
       </div>
 
-      <div style={{ marginBottom: '1.5rem', padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px' }}>
-        <label className="stat-label" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)' }}>Strategy Mode</label>
-        <div style={{
-          width: '100%',
-          padding: '0.8rem',
-          background: 'var(--bg-secondary)',
-          color: 'var(--text-primary)',
-          border: '1px solid var(--border-color)',
-          borderRadius: '4px',
-          fontSize: '1rem'
-        }}>
+      <div className="mini-card">
+        <label className="stat-label" style={{ display: "block", marginBottom: "0.5rem" }}>Strategy Mode</label>
+        <div style={{ fontWeight: 700 }}>
           LLM Autonomous Trading (Full Auto)
         </div>
-        <div style={{ marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-          Legacy momentum/reversal options removed. Trading decisions are fully automated by LLM risk validation.
+        <div style={{ marginTop: "0.6rem", color: "var(--text-muted)", fontSize: "0.88rem" }}>
+          You do not select strategy. Engine automatically chooses regime and candidates from historical data.
         </div>
       </div>
 
-      <div style={{ marginBottom: '1rem' }}>
-        <label className="stat-label" style={{ display: 'block', marginBottom: '0.5rem' }}>Trading Cycle</label>
-        <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          Managed automatically by Pump Detection System (Real-time)
-        </div>
+      <div className="config-list">
+        <div><span>Cycle</span><strong>{currentCycle}s</strong></div>
+        <div><span>Min Confidence</span><strong>{((config?.min_confidence || 0.75) * 100).toFixed(0)}%</strong></div>
+        <div><span>Stop Loss</span><strong>{(config?.stop_loss_percent || 1.5).toFixed(1)}%</strong></div>
+        <div><span>Take Profit</span><strong>{(config?.take_profit_percent || 3.0).toFixed(1)}%</strong></div>
       </div>
     </div>
   );

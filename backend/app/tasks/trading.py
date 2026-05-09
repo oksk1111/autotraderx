@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 from datetime import timedelta, timezone
 from typing import Any, cast
 import pyupbit
@@ -17,6 +18,8 @@ from app.services.notifications import Notifier
 from app.trading.engine import TradeExecutor, TradingEngine
 from app.models.trading import AutoTradingConfig, TradePosition
 from app.trading.market_selector import MarketSelector
+from app.trading.autonomous_orchestrator import AutonomousStrategyOrchestrator
+from app.core.redis_client import get_redis_client
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -107,84 +110,115 @@ async def _run_llm_autotrading_cycle(
     executor: TradeExecutor,
     markets: list[str],
     multi_tf_data_dict: dict,
+    feature_map: dict[str, dict[str, Any]],
     account_info: dict,
 ) -> None:
-    """Single-path LLM-driven auto trading cycle."""
+    """Single-path LLM-driven autonomous portfolio cycle."""
     from app.trading.engine import TradeDecisionResult
+
+    open_positions = db.query(TradePosition).filter(TradePosition.status == "OPEN").all()
+    open_markets = {p.market for p in open_positions}
+
+    orchestrator = AutonomousStrategyOrchestrator(
+        predictor=engine.predictor,
+        verifier=engine.verifier,
+        settings=settings,
+    )
+    plan = await orchestrator.build_plan(
+        markets=markets,
+        multi_tf_data_dict=multi_tf_data_dict,
+        feature_map=feature_map,
+        account_info=account_info,
+    )
+
+    rd = get_redis_client()
+    if rd:
+        try:
+            rd.set("autonomous_strategy_status", json.dumps(plan, ensure_ascii=False), ex=300)
+        except Exception as e:
+            logger.warning("Failed to write autonomous strategy status: %s", e)
+
+    buy_candidates = plan.get("selected_markets", [])
+    allowed_new_positions = max(0, settings.max_open_positions - len(open_markets))
+    buy_targets = set(buy_candidates[:allowed_new_positions])
+
+    logger.info(
+        "🤖 Autonomous plan: candidates=%s, buy_targets=%s, open=%s",
+        len(plan.get("candidates", [])),
+        list(buy_targets),
+        list(open_markets),
+    )
 
     for market in markets:
         try:
-            market_tf_data = multi_tf_data_dict.get(market, {})
-            market_data = market_tf_data.get("minute60", [])
-            if len(market_data) < 150:
-                logger.warning("Insufficient data for %s: %s rows", market, len(market_data))
+            features = feature_map.get(market)
+            if not features:
                 continue
 
-            features = build_features_from_market_data(market_data, market)
             decision = await engine.decide(db, market, features, account_info)
 
-            if decision.action == "BUY":
-                trading_ok, reason = _is_trading_allowed()
-                if not trading_ok:
-                    logger.warning("⛔ %s BUY blocked: %s", market, reason)
-                    continue
-                if account_info["open_positions"] >= settings.max_open_positions:
-                    logger.info(
-                        "⏸️ %s BUY skipped: max positions reached (%s/%s)",
-                        market,
-                        account_info["open_positions"],
-                        settings.max_open_positions,
-                    )
-                    continue
-                if decision.confidence < settings.min_confidence_for_trade:
-                    logger.info(
-                        "⏸️ %s BUY skipped: confidence %.1f%% < %.1f%%",
-                        market,
-                        decision.confidence * 100,
-                        settings.min_confidence_for_trade * 100,
-                    )
-                    continue
-
             if decision.action == "HOLD":
-                logger.info("⏸️ %s: HOLD - %s", market, decision.rationale[:120])
                 continue
 
-            if decision.action == "BUY":
-                decision = TradeDecisionResult(
-                    approved=True,
-                    action="BUY",
-                    market=decision.market,
-                    confidence=decision.confidence,
-                    rationale=f"LLM Auto: {decision.rationale}",
-                    emergency=decision.emergency,
-                    investment_ratio=min(decision.investment_ratio, settings.max_investment_ratio),
-                    max_loss_acceptable=decision.max_loss_acceptable,
-                    take_profit_target=decision.take_profit_target,
-                )
-            else:
-                decision = TradeDecisionResult(
+            # 포지션이 이미 있을 때만 SELL 허용 (예측 청산)
+            if decision.action == "SELL" and market in open_markets:
+                sell_decision = TradeDecisionResult(
                     approved=True,
                     action="SELL",
                     market=decision.market,
                     confidence=decision.confidence,
-                    rationale=f"LLM Auto: {decision.rationale}",
+                    rationale=f"Autonomous Exit: {decision.rationale}",
                     emergency=decision.emergency,
                     investment_ratio=1.0,
                     max_loss_acceptable=decision.max_loss_acceptable,
                     take_profit_target=decision.take_profit_target,
                 )
+                executor.execute(db, sell_decision, account_info["available_balance"])
+                logger.info("🤖 Autonomous SELL %s (conf %.1f%%)", market, decision.confidence * 100)
+                continue
 
-            executor.execute(db, decision, account_info["available_balance"])
-            logger.info(
-                "🤖 LLM Auto %s %s (conf %.1f%%, ratio %.1f%%)",
-                market,
-                decision.action,
-                decision.confidence * 100,
-                decision.investment_ratio * 100,
+            if decision.action != "BUY":
+                continue
+
+            if market not in buy_targets:
+                logger.info("⏸️ %s BUY skipped: not in autonomous top picks", market)
+                continue
+
+            trading_ok, reason = _is_trading_allowed()
+            if not trading_ok:
+                logger.warning("⛔ %s BUY blocked: %s", market, reason)
+                continue
+
+            if decision.confidence < settings.min_confidence_for_trade:
+                logger.info(
+                    "⏸️ %s BUY skipped: confidence %.1f%% < %.1f%%",
+                    market,
+                    decision.confidence * 100,
+                    settings.min_confidence_for_trade * 100,
+                )
+                continue
+
+            buy_decision = TradeDecisionResult(
+                approved=True,
+                action="BUY",
+                market=decision.market,
+                confidence=decision.confidence,
+                rationale=f"Autonomous Entry: {decision.rationale}",
+                emergency=decision.emergency,
+                investment_ratio=min(decision.investment_ratio, settings.max_investment_ratio),
+                max_loss_acceptable=decision.max_loss_acceptable,
+                take_profit_target=decision.take_profit_target,
             )
 
+            executor.execute(db, buy_decision, account_info["available_balance"])
+            logger.info(
+                "🤖 Autonomous BUY %s (conf %.1f%%, ratio %.1f%%)",
+                market,
+                buy_decision.confidence * 100,
+                buy_decision.investment_ratio * 100,
+            )
         except Exception as e:
-            logger.error("LLM auto cycle error for %s: %s", market, e, exc_info=True)
+            logger.error("Autonomous cycle error for %s: %s", market, e, exc_info=True)
             continue
 
 
@@ -411,6 +445,18 @@ async def run_cycle() -> None:
     # 시장별 멀티 타임프레임 데이터 가져오기 (1h, 15m, 5m)
     multi_tf_data_dict = await data_service.fetch_multi_timeframe()
 
+    # 공통 feature map 사전 생성 (중복 계산 방지)
+    feature_map: dict[str, dict[str, Any]] = {}
+    for market in markets:
+        try:
+            market_tf_data = multi_tf_data_dict.get(market, {})
+            market_data = market_tf_data.get("minute60", [])
+            if len(market_data) < 150:
+                continue
+            feature_map[market] = build_features_from_market_data(market_data, market)
+        except Exception as e:
+            logger.warning("Feature build failed for %s: %s", market, e)
+
     # Upbit 계정 정보 및 자산 계산
     try:
         # balances는 위에서 이미 가져왔으나, KRW 잔고 등 정확한 계산을 위해 재사용
@@ -528,6 +574,7 @@ async def run_cycle() -> None:
                 executor=executor,
                 markets=markets,
                 multi_tf_data_dict=multi_tf_data_dict,
+                feature_map=feature_map,
                 account_info=account_info,
             )
             return
@@ -535,12 +582,9 @@ async def run_cycle() -> None:
         # Fallback branch: keep single decision engine even if llm_autotrading_enabled is disabled.
         for market in markets:
             try:
-                market_tf_data = multi_tf_data_dict.get(market, {})
-                market_data = market_tf_data.get('minute60', [])
-                if len(market_data) < 150:
+                features = feature_map.get(market)
+                if not features:
                     continue
-
-                features = build_features_from_market_data(market_data, market)
                 decision = await engine.decide(db, market, features, account_info)
                 if decision.approved:
                     executor.execute(db, decision, account_info["available_balance"])
