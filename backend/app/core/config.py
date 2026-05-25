@@ -89,7 +89,40 @@ class Settings(BaseSettings):
     surge_alert_cooldown_seconds: int = 180
     surge_alert_min_volume_24h: float = 35_000_000_000
 
-    tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH", "KRW-XRP"]  # v6.0: 메이저 3개만 (분산 줄임)
+    tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH"]  # v5: 메이저 2개 기본
+
+    # =========================================================================
+    # v5.0 Capital First Rebuild — 신규 설정
+    # =========================================================================
+    # 1) 라이브 매매 활성 (기본 false = Paper only)
+    live_trading_enabled: bool = False
+
+    # 2) 리스크 관리
+    risk_per_trade: float = 0.01          # 자본의 1%
+    max_position_ratio: float = 0.25      # 단일 포지션 자본 비중 상한
+    daily_loss_limit: float = 0.03        # 일일 -3% 도달 시 자동 정지
+    fee_rate: float = 0.0005              # 업비트 수수료 (편도)
+    slippage_est: float = 0.0005          # 슬리피지 추정
+
+    # 3) 전략 모드
+    strategy_mode: str = "auto"           # auto | trend | range | off
+
+    # 4) Kill switch (Redis key 와 매칭)
+    kill_switch: bool = False
+
+    # 5) WebSocket
+    upbit_ws_url: str = "wss://api.upbit.com/websocket/v1"
+    ws_ping_interval_sec: int = 60
+    ws_reconnect_max_sec: int = 30
+
+    # 6) 캔들 buffer 크기
+    candle_1m_history: int = 240
+    candle_5m_history: int = 200
+    candle_15m_history: int = 200
+    trade_buffer_size: int = 2000
+
+    # 7) 백테스트
+    backtest_data_dir: str = "data/raw"
 
     slack_webhook_url: str | None = None
     telegram_bot_token: str | None = None

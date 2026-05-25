@@ -1,33 +1,57 @@
 from __future__ import annotations
-import json
+
 from typing import Any
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
- 
+
+from app.broker import PaperBroker, UpbitLiveBroker
+from app.core.config import get_settings
 from app.db.session import get_db
-from app.core.redis_client import get_redis_client
-from app.models import MLDecisionLog, TradeLog
+from app.engine import get_engine
+from app.models import (
+    MLDecisionLog, PaperPosition, StrategySignal, TradeLog, TradePosition,
+)
 from app.schemas.trading import MLDecisionLogSchema, TradeLogSchema
-from app.services.state import SystemSnapshotService
 
 router = APIRouter()
 
 
 @router.get("/metrics")
-def get_metrics(db: Session = Depends(get_db)) -> dict[str, float | int]:
+def get_metrics(db: Session = Depends(get_db)) -> dict[str, Any]:
+    s = get_settings()
+    paper = PaperBroker()
+    live = UpbitLiveBroker()
+    engine = get_engine()
     trade_count = db.query(TradeLog).count()
-    latest_trade = db.query(TradeLog).order_by(TradeLog.created_at.desc()).first()
-    latest_confidence = db.query(MLDecisionLog).order_by(MLDecisionLog.created_at.desc()).first()
+    paper_open = db.query(PaperPosition).filter(PaperPosition.status == "OPEN").count()
+    live_open = db.query(TradePosition).filter(TradePosition.status == "OPEN").count()
+    latest_signal = db.query(StrategySignal).order_by(StrategySignal.created_at.desc()).first()
     return {
         "trade_count": trade_count,
-        "last_trade_amount": latest_trade.amount if latest_trade else 0,
-        "last_confidence": latest_confidence.confidence if latest_confidence else 0,
+        "paper_equity": paper.get_equity(),
+        "live_equity": live.get_equity() if s.live_trading_enabled else 0.0,
+        "paper_open_positions": paper_open,
+        "live_open_positions": live_open,
+        "daily_realized_pnl_krw": engine.state.daily_realized_pnl_krw,
+        "daily_start_equity": engine.state.daily_start_equity,
+        "daily_trade_count": engine.state.daily_trade_count,
+        "live_trading_enabled": s.live_trading_enabled,
+        "strategy_mode": s.strategy_mode,
+        "last_signal": {
+            "market": latest_signal.market,
+            "regime": latest_signal.regime,
+            "strategy": latest_signal.strategy,
+            "action": latest_signal.action,
+            "price": latest_signal.price,
+            "created_at": latest_signal.created_at.isoformat() if latest_signal.created_at else None,
+        } if latest_signal else None,
     }
 
 
 @router.get("/logs", response_model=list[TradeLogSchema])
 def get_trade_logs(db: Session = Depends(get_db)) -> list[TradeLog]:
-    return db.query(TradeLog).order_by(TradeLog.created_at.desc()).limit(50).all()
+    return db.query(TradeLog).order_by(TradeLog.created_at.desc()).limit(100).all()
 
 
 @router.get("/decisions", response_model=list[MLDecisionLogSchema])
@@ -36,57 +60,17 @@ def get_decision_logs(db: Session = Depends(get_db)) -> list[MLDecisionLog]:
 
 
 @router.get("/snapshot")
-def get_snapshot(service: SystemSnapshotService = Depends(SystemSnapshotService.from_settings)) -> dict:
-    return service.snapshot()
-
-
-@router.get("/personas_status")
-def get_personas_status() -> dict:
-    result = {}
-    rd = get_redis_client()
-    if rd:
-        raw_data = rd.hgetall("persona_status")
-        if not isinstance(raw_data, dict):
-            raw_data = {}
-        for market, data_str in raw_data.items():
-            try:
-                result[market] = json.loads(data_str)
-            except:
-                pass
-    return result
-
-
-@router.get("/autonomy_status")
-def get_autonomy_status() -> dict:
-    rd = get_redis_client()
-    if not rd:
-        return {
-            "mode": "AUTONOMOUS_PREPOSITIONING",
-            "status": "redis_unavailable",
-            "selected_markets": [],
-            "candidates": [],
-        }
-
-    raw = rd.get("autonomous_strategy_status")
-    if not raw:
-        return {
-            "mode": "AUTONOMOUS_PREPOSITIONING",
-            "status": "waiting_first_cycle",
-            "selected_markets": [],
-            "candidates": [],
-        }
-
-    try:
-        payload: Any = raw
-        if isinstance(payload, bytes):
-            payload = payload.decode("utf-8", errors="ignore")
-        if not isinstance(payload, str):
-            payload = str(payload)
-        return json.loads(payload)
-    except Exception:
-        return {
-            "mode": "AUTONOMOUS_PREPOSITIONING",
-            "status": "decode_error",
-            "selected_markets": [],
-            "candidates": [],
-        }
+def get_snapshot() -> dict:
+    s = get_settings()
+    engine = get_engine()
+    paper = PaperBroker()
+    return {
+        "tracked_markets": s.tracked_markets,
+        "strategy_mode": s.strategy_mode,
+        "live_trading_enabled": s.live_trading_enabled,
+        "paper_equity": paper.get_equity(),
+        "daily_pnl_krw": engine.state.daily_realized_pnl_krw,
+        "daily_trade_count": engine.state.daily_trade_count,
+        "max_daily_trades": s.max_daily_trades,
+        "regime_per_market": engine.state.last_regime,
+    }

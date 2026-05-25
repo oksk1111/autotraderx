@@ -1,3 +1,5 @@
+"""v5.0 Celery — minimal. Engine主 cycle은 FastAPI lifespan(ShadowRunner)에서 돌고,
+Celery 는 안전망(주기 점검/헬스/뉴스)만 담당."""
 from __future__ import annotations
 
 import asyncio
@@ -16,141 +18,36 @@ celery_app = Celery(
     broker=settings.resolved_redis_url,
     backend=settings.resolved_redis_url,
 )
-# Beat 스케줄 동적 생성 (v6.0: 보수적 주기)
-beat_schedule = {
-    'trading-cycle-scalping': {
-        'task': 'app.celery_app.run_trading_cycle',
-        'schedule': float(settings.trading_cycle_seconds),  # v6.0: 180초 (3분)
-    },
-    'emergency-trading-check': {
-        'task': 'app.celery_app.run_emergency_check',
-        'schedule': 120.0,  # v6.0: 120초(2분)마다 긴급 체크 (60→120, API 부하 감소)
-    },
-    'system-health-check': {
-        'task': 'app.celery_app.run_health_check',
-        'schedule': 7200.0,  # 2시간(7200초)마다 시스템 헬스 체크
-    },
-    'auto-model-retrain': {
-        'task': 'app.celery_app.run_auto_retrain',
-        'schedule': crontab(hour='3', minute='0'),  # 매일 새벽 3시에 실행
-    },
-}
-
-if settings.surge_alert_enabled:
-    beat_schedule['surge-alert-loop'] = {
-        'task': 'app.celery_app.run_surge_alert_loop',
-        'schedule': 60.0,
-    }
-
-# Legacy momentum/reversal execution loops retired.
 
 celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     timezone="Asia/Seoul",
     enable_utc=False,
-    beat_schedule=beat_schedule,
+    beat_schedule={
+        # Safety-net cycle. ShadowRunner in API process는 30s 주기로 이미 호출.
+        # Celery는 API가 죽었을 경우 백업으로 5분마다 한번 실행.
+        "engine-safety-cycle": {
+            "task": "app.celery_app.run_engine_safety_cycle",
+            "schedule": 300.0,
+        },
+        "system-health-check": {
+            "task": "app.celery_app.run_health_check",
+            "schedule": 7200.0,
+        },
+    },
 )
 
 
 @celery_app.task
-def run_trading_cycle() -> str:
-    from app.tasks.trading import run_cycle  # pylint: disable=import-outside-toplevel
-
-    logger.info("Triggering trading cycle")
-    asyncio.run(run_cycle())
+def run_engine_safety_cycle() -> str:
+    from app.tasks.trading import run_safety_cycle
+    asyncio.run(run_safety_cycle())
     return "ok"
-
-
-@celery_app.task
-def run_emergency_check() -> str:
-    from app.tasks.trading import run_emergency_check  # pylint: disable=import-outside-toplevel
-
-    logger.debug("Triggering emergency trading check")
-    asyncio.run(run_emergency_check())
-    return "ok"
-
-
-@celery_app.task
-def run_surge_alert_loop() -> str:
-    from app.tasks.trading import run_surge_alert_loop  # pylint: disable=import-outside-toplevel
-
-    logger.info("Triggering surge alert websocket loop")
-    asyncio.run(run_surge_alert_loop())
-    return "ok"
-
-
-@celery_app.task
-def run_auto_retrain() -> str:
-    """
-    자동 모델 재훈련 태스크
-    매일 새벽 3시에 실행되어 최신 데이터로 ML 모델을 재훈련합니다.
-    """
-    import subprocess
-    from pathlib import Path
-    
-    logger.info("🤖 Starting automatic model retraining...")
-    
-    try:
-        scripts_dir = Path(__file__).parent.parent / "scripts"
-        result = subprocess.run(
-            ["python", str(scripts_dir / "auto_retrain.py")],
-            capture_output=True,
-            text=True,
-            timeout=3600  # 1시간 타임아웃
-        )
-        
-        if result.returncode == 0:
-            logger.info("✅ Automatic model retraining completed successfully")
-            logger.info(result.stdout[-500:] if result.stdout else "")
-            return "success"
-        else:
-            logger.error(f"❌ Model retraining failed: {result.stderr}")
-            return "failed"
-            
-    except subprocess.TimeoutExpired:
-        logger.error("❌ Model retraining timeout (1 hour)")
-        return "timeout"
-    except Exception as e:
-        logger.error(f"❌ Model retraining error: {e}")
-        return "error"
 
 
 @celery_app.task
 def run_health_check() -> str:
-    """
-    시스템 헬스 체크 태스크
-    2시간마다 실행되어 시스템 상태를 점검하고 Groq LLM으로 분석합니다.
-    """
-    import subprocess
-    from pathlib import Path
-    
-    logger.info("🏥 Starting system health check...")
-    
-    try:
-        scripts_dir = Path(__file__).parent.parent / "scripts"
-        result = subprocess.run(
-            ["python", str(scripts_dir / "daily_health_check.py")],
-            capture_output=True,
-            text=True,
-            timeout=300  # 5분 타임아웃
-        )
-        
-        if result.returncode == 0:
-            logger.info("✅ System health check completed")
-            # 결과의 주요 부분만 로그에 출력
-            output_lines = result.stdout.split('\n')
-            for line in output_lines:
-                if '🏥' in line or '✅' in line or '⚠️' in line or '❌' in line:
-                    logger.info(line)
-            return "success"
-        else:
-            logger.error(f"❌ Health check failed: {result.stderr}")
-            return "failed"
-            
-    except subprocess.TimeoutExpired:
-        logger.error("❌ Health check timeout (5 minutes)")
-        return "timeout"
-    except Exception as e:
-        logger.error(f"❌ Health check error: {e}")
-        return "error"
+    from app.tasks.trading import run_health
+    asyncio.run(run_health())
+    return "ok"

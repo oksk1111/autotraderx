@@ -4,7 +4,9 @@ import MetricsGrid from "./MetricsGrid";
 import TradeTable from "./TradeTable";
 import AccountInfo from "./AccountInfo";
 import TradingConfigPanel from "./TradingConfigPanel";
-import AutonomyBoard from "./AutonomyBoard";
+import StrategyStatus from "./StrategyStatus";
+import RiskPanel from "./RiskPanel";
+import ShadowComparePanel from "./ShadowComparePanel";
 
 const api = axios.create({ baseURL: "/api" });
 
@@ -12,33 +14,32 @@ function DashboardPage() {
   const metricsQuery = useQuery(["metrics"], async () => {
     const { data } = await api.get("/dashboard/metrics");
     return data;
-  });
+  }, { refetchInterval: 5000 });
 
   const tradesQuery = useQuery(["trades"], async () => {
     const { data } = await api.get("/dashboard/logs");
     return data;
-  });
+  }, { refetchInterval: 10000 });
 
   const snapshotQuery = useQuery(["snapshot"], async () => {
     const { data } = await api.get("/dashboard/snapshot");
     return data;
-  });
-  
-  const autonomyQuery = useQuery(["autonomy"], async () => {
-    const { data } = await api.get("/dashboard/autonomy_status");
-    return data;
-  }, { refetchInterval: 7000 });
+  }, { refetchInterval: 5000 });
+
+  const liveOn = metricsQuery.data?.live_trading_enabled;
 
   return (
     <div className="page">
       <header className="hero-header">
         <div>
           <h1>AutoTrader X</h1>
-          <p>LLM Autonomous Prepositioning Desk</p>
+          <p>Capital-First Regime-Switching Engine · v5.0</p>
         </div>
         <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-          <span className="badge">LIVE</span>
-          <span className="badge secondary">NO MANUAL OVERRIDE</span>
+          <span className={`badge ${liveOn ? "danger" : "secondary"}`}>
+            {liveOn ? "LIVE TRADING" : "PAPER ONLY"}
+          </span>
+          <span className="badge secondary">Risk 1% / Trade</span>
         </div>
       </header>
 
@@ -47,14 +48,15 @@ function DashboardPage() {
         <TradingConfigPanel />
       </div>
 
-      <MetricsGrid 
-        metrics={metricsQuery.data} 
+      <MetricsGrid
+        metrics={metricsQuery.data}
         snapshot={snapshotQuery.data}
-        autonomy={autonomyQuery.data}
-        loading={metricsQuery.isLoading || snapshotQuery.isLoading} 
+        loading={metricsQuery.isLoading || snapshotQuery.isLoading}
       />
 
-      <AutonomyBoard autonomy={autonomyQuery.data} loading={autonomyQuery.isLoading} />
+      <StrategyStatus />
+      <RiskPanel />
+      <ShadowComparePanel />
 
       <TradeTable trades={tradesQuery.data} loading={tradesQuery.isLoading} />
     </div>

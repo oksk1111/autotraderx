@@ -1,34 +1,22 @@
-function MetricsGrid({ metrics, snapshot, autonomy, loading }) {
+function fmtKrw(v) {
+  if (v === null || v === undefined) return "-";
+  return new Intl.NumberFormat("ko-KR").format(Math.round(v)) + " KRW";
+}
+
+function MetricsGrid({ metrics, snapshot, loading }) {
   if (loading) return <div className="loading mb-4">Loading metrics...</div>;
 
-  const selectedCount = autonomy?.selected_markets?.length || 0;
+  const dailyPnl = metrics?.daily_realized_pnl_krw ?? 0;
+  const startEq = metrics?.daily_start_equity ?? 0;
+  const pnlPct = startEq > 0 ? ((dailyPnl / startEq) * 100).toFixed(2) : "0.00";
 
   const items = [
-    { 
-      label: "24h P&L", 
-      value: snapshot?.pnl_24h ? `${snapshot.pnl_24h}%` : "0.00%",
-      isPositive: (snapshot?.pnl_24h || 0) >= 0
-    },
-    { 
-      label: "Tracked Markets", 
-      value: snapshot?.active_markets?.length ?? 0 
-    },
-    { 
-      label: "Total Trades", 
-      value: metrics?.trade_count ?? 0 
-    },
-    { 
-      label: "Last Confidence", 
-      value: metrics?.last_confidence ? `${(metrics.last_confidence * 100).toFixed(1)}%` : "-" 
-    },
-    {
-      label: "Autonomy Picks",
-      value: selectedCount,
-    },
-    {
-      label: "Groq Latency",
-      value: snapshot?.groq_latency_ms ? `${snapshot.groq_latency_ms}ms` : "-",
-    }
+    { label: "Paper Equity", value: fmtKrw(metrics?.paper_equity) },
+    { label: "Live Equity", value: metrics?.live_trading_enabled ? fmtKrw(metrics?.live_equity) : "OFF" },
+    { label: "Daily P&L", value: `${fmtKrw(dailyPnl)} (${pnlPct}%)`, isPositive: dailyPnl >= 0 },
+    { label: "Daily Trades", value: `${metrics?.daily_trade_count ?? 0}` },
+    { label: "Paper Open", value: metrics?.paper_open_positions ?? 0 },
+    { label: "Mode", value: (metrics?.strategy_mode ?? "auto").toUpperCase() },
   ];
 
   return (
@@ -36,7 +24,7 @@ function MetricsGrid({ metrics, snapshot, autonomy, loading }) {
       {items.map((item) => (
         <div key={item.label} className="stat-card">
           <div className="stat-label">{item.label}</div>
-          <div className={`stat-value ${item.isPositive === true ? 'text-success' : item.isPositive === false ? 'text-danger' : ''}`}>
+          <div className={`stat-value ${item.isPositive === true ? "text-success" : item.isPositive === false ? "text-danger" : ""}`}>
             {item.value}
           </div>
         </div>

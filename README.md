@@ -1,90 +1,140 @@
-# AutoTrader-LXA v3
+# AutoTraderX v5.0 — Capital First Rebuild
 
-Hybrid ML + dual LLM autonomous cryptocurrency trading stack rebuilt from the v3 planning document.
+> **WARNING — 본 프로젝트는 실거래 자금 손실을 일으킬 수 있습니다.**
+> v4.x 운영에서 실제 -91.23% 손실이 발생했고, 그 사후 분석을 바탕으로 v5.0이 다시 쓰여졌습니다.
+> v5.0은 수익 극대화가 아니라 **자본 보존**을 1순위 목표로 합니다.
 
-## Features
+상세 기획: [docs/가상화폐 자동 매매 기획 5.md](docs/가상화폐%20자동%20매매%20기획%205.md)
 
-- FastAPI backend orchestrating ML inference, dual LLM verification (Groq + Ollama), and emergency safeguards.
-- Celery worker/beat for continuous trading cycles and scheduling.
-- React + Vite dashboard showing metrics, decisions, and trade history.
-- PostgreSQL for persistence, Redis for task queue, Ollama container for local LLMs.
+---
 
-## Getting Started
+## v5.0 핵심 변경
 
-1. Duplicate `.env.example` into `.env` and fill all secrets (Upbit, Groq, Telegram, etc.).
-2. Configure trading parameters (optional):
-   - `TRADING_CYCLE_SECONDS`: 매매 주기 (초단위, 기본값: 300 = 5분)
-     - 60: 1분 (매우 공격적, 수수료 주의)
-     - 180: 3분 (빠른 대응)
-     - 300: 5분 (권장, LLM 처리 시간 고려)
-     - 600: 10분 (보수적)
-   - `DEFAULT_TRADE_AMOUNT`: 거래당 투자 금액 (기본값: 50000원)
-   - `MAX_OPEN_POSITIONS`: 최대 동시 보유 포지션 (기본값: 3)
-   - `STOP_LOSS_PERCENT`: 손절 비율 (기본값: 3%)
-   - `TAKE_PROFIT_PERCENT`: 익절 비율 (기본값: 5%)
-3. Build and start the stack:
+| 항목 | v4 (폐기) | v5 |
+|---|---|---|
+| 엔진 개수 | 8개 (충돌, 디버깅 불가) | **1개** (`app/engine/trading_engine.py`) |
+| 시세 수신 | REST 폴링 (1~5분) | **Upbit WebSocket** (ticker/trade/orderbook) |
+| 의사결정 | ML 단기가격예측 + LLM 검증 | **결정론적 규칙 + Regime Switching** |
+| 전략 | 6+ 동시 실행 | **Trend-Following** ↔ **Mean Reversion** (regime별 1개) |
+| 포지션 사이징 | 신뢰도 ×고정 비율 | **ATR 기반 1% Risk Sizing** |
+| 기본 모드 | 라이브 자동매매 | **Paper Trading (LIVE_TRADING_ENABLED=false)** |
+| Kill switch | 부분 작동 | **API 1초 내 정지** |
+| 백테스트 | 없음 | **이벤트드리븐 백테스터 + 메트릭** |
+| ML/LLM | 의사결정자 | **보조 필터 / 뉴스 차단용으로만** |
 
-```bash
-docker compose up --build
+---
+
+## 빠른 시작
+
+### 1. 환경 변수 (`.env`)
+
+```env
+POSTGRES_HOST=postgres
+POSTGRES_PASSWORD=...
+REDIS_HOST=redis
+
+UPBIT_ACCESS_KEY=
+UPBIT_SECRET_KEY=
+
+# v5 안전 플래그 — 기본 false
+LIVE_TRADING_ENABLED=false
+
+TRACKED_MARKETS=KRW-BTC,KRW-ETH
+
+RISK_PER_TRADE=0.01
+MAX_OPEN_POSITIONS=1
+MAX_POSITION_RATIO=0.25
+DAILY_LOSS_LIMIT=0.03
+MAX_DAILY_TRADES=6
+COOLDOWN_AFTER_LOSS_MIN=30
+
+STRATEGY_MODE=auto
 ```
 
-This launches PostgreSQL, Redis, backend, Celery worker/beat, frontend, and Ollama.
-
-Backend runs at `http://localhost:8000/api`, frontend dashboard at `http://localhost:4173`.
-
-## Development
-
-- Backend dependencies: `pip install -r backend/requirements.txt`
-- Run API locally: `uvicorn app.main:app --reload`
-- Frontend dev server: `npm install && npm run dev` inside `frontend`.
-- Celery worker: `celery -A app.celery_app.celery_app worker --loglevel=info`
-
-## Next Strategy Rollout (Cloud, systemd)
-
-For non-docker cloud deployments, use the rollout helper:
-
-```bash
-chmod +x deploy/run_next_strategy.sh
-PROJECT_DIR=/home/ubuntu/autotraderx ./deploy/run_next_strategy.sh
-```
-
-It performs:
-- `git fetch/pull`
-- service restart (`autotrader-backend`, `autotrader-worker`, `autotrader-scheduler`, `autotrader-frontend`)
-- health checks via `systemctl is-active`
-- surge alert smoke task trigger via Celery
-
-Validate surge alert settings and notification readiness:
+### 2. 백엔드
 
 ```bash
 cd backend
-source venv/bin/activate
-python scripts/test_surge_alert_config.py
+pip install -r requirements.txt
+alembic upgrade head
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### Utility Scripts
+WebSocket 클라이언트는 FastAPI lifespan 에서 자동 기동됩니다.
 
-- **Position Sync**: Sync Upbit account balance with local database.
-  ```bash
-  docker compose exec backend python /app/scripts/sync_positions.py
-  ```
-- **Health Check**: Run manual system health check.
-  ```bash
-  docker compose exec backend python /app/scripts/daily_health_check.py
-  ```
-
-## Tests
-
-Run backend unit tests:
+### 3. Celery (헬스/뉴스 등 부수 작업)
 
 ```bash
-cd backend && pytest
+celery -A app.celery_app.celery_app worker --loglevel=info
+celery -A app.celery_app.celery_app beat --loglevel=info
 ```
 
-## Folder Structure
+### 4. 프론트엔드
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 5. 백테스트
+
+```bash
+cd backend
+python -m app.backtest.backtester --markets KRW-BTC,KRW-ETH --days 90 --strategy auto
+```
+
+---
+
+## 운영 절차
+
+1. **Day 1~14**: `LIVE_TRADING_ENABLED=false`. Paper-only 가동, 매일 메트릭 관찰.
+2. **Go-Live 체크** (기획서 §12.2):
+   - Paper 14일 누적 PnL ≥ 0%
+   - Paper MDD ≤ -5%
+   - 일일 평균 거래 ≤ 4
+   - Kill switch 1초 내 동작 확인
+3. **라이브 전환**: `LIVE_TRADING_ENABLED=true` 후 재기동.
+4. **비상정지**:
+   ```bash
+   curl -X POST http://localhost:8000/api/risk/kill-switch \
+        -H "Content-Type: application/json" \
+        -d '{"enable":true,"close_positions":true}'
+   ```
+
+---
+
+## 폴더 구조
 
 ```
-backend/    FastAPI app, ML/LLM services, Celery tasks
-frontend/   React dashboard (Vite)
-docs/       Planning docs (source of truth)
+backend/app/
+├── marketdata/      # Upbit WebSocket + 캔들 빌더 + 인메모리 저장소
+├── strategy/        # Regime Classifier + Trend/Range 전략 + 지표
+├── risk/            # 일일 손실 가드 / 포지션 사이저 / Kill Switch
+├── broker/          # Paper / Live 브로커
+├── engine/          # 유일한 TradingEngine + Shadow Runner
+├── backtest/        # 이벤트 드리븐 백테스터 + 메트릭
+├── api/             # FastAPI 라우트
+├── tasks/           # Celery (헬스체크/뉴스)
+└── models/          # SQLAlchemy 모델
+frontend/src/        # React + Vite 대시보드
+docs/                # 기획서 (v5 = 현행)
 ```
+
+---
+
+## 폐기 (v4 잔재 — 삭제됨)
+
+- `app/trading/*` (8개 엔진)
+- `app/services/trading/emergency_trader.py`
+- `app/ml/rl_agent.py`, `app/ml/trading_env.py`
+- 프론트 `AutonomyBoard`, `PersonaPanel`
+
+---
+
+## 솔직한 면책
+
+- 학습/연구용 프로젝트입니다.
+- 어떤 알고리즘도 가상화폐 시장에서 지속적 수익을 보장하지 않습니다.
+- v5.0 목표는 "최악 시나리오에서도 MDD -10% 이내, 일일 평균 거래 ≤ 4".
+- 본 코드 사용으로 인한 손실에 대해 작성자는 책임지지 않습니다.
