@@ -1,10 +1,16 @@
 """Regime classifier — TREND / RANGE / CHAOS / NEUTRAL.
 
 Decision rule (priority):
-  1) ATR% > 1.5% OR |vol_z| > 3            → CHAOS
-  2) ADX(14) >= 25                          → TREND
-  3) ADX(14) < 18 AND BB width compressed   → RANGE
-  4) otherwise                              → NEUTRAL
+  1) ATR% > 1.5% OR |vol_z| > 3            → CHAOS (거래 정지)
+  2) ADX(14) >= 25                          → TREND  (Trend-Following)
+  3) ADX(14) < 25                           → RANGE  (Mean-Reversion)
+  4) indicator NaN / insufficient bars     → NEUTRAL
+
+주의: v5.0 초기 버전은 "ADX < 18 AND BB compressed" 만 RANGE 로 두고
+ADX 18~25 구간을 NEUTRAL 사각지대로 만들어, 대부분의 시간 어느 전략도
+선택되지 않는 "거래 0건" 버그가 있었다. 횡보 강도(BB width) 는 진입 시
+Mean-Reversion 전략 내부의 RSI/BB 조건이 다시 검증하므로, 분류기 단계
+에서 이중으로 좁힐 필요가 없다.
 """
 from __future__ import annotations
 
@@ -47,12 +53,10 @@ class RegimeClassifier:
     def __init__(
         self,
         adx_trend_threshold: float = 25.0,
-        adx_range_threshold: float = 18.0,
         atr_chaos_threshold: float = 0.015,
         vol_z_chaos_threshold: float = 3.0,
     ):
         self.adx_trend = adx_trend_threshold
-        self.adx_range = adx_range_threshold
         self.atr_chaos = atr_chaos_threshold
         self.vol_z_chaos = vol_z_chaos_threshold
 
@@ -82,9 +86,11 @@ class RegimeClassifier:
         if not math.isnan(adx_v) and adx_v >= self.adx_trend:
             return RegimeReading(Regime.TREND, adx_v, atr_pct, bb_width, vol_z,
                                  note=f"adx={adx_v:.1f}")
-        # 3) Range — ADX low AND BB compressed
-        if not math.isnan(adx_v) and adx_v < self.adx_range:
-            if not math.isnan(bb_width) and bb_width < 0.02:  # <2% bandwidth
-                return RegimeReading(Regime.RANGE, adx_v, atr_pct, bb_width, vol_z,
-                                     note=f"adx={adx_v:.1f} bb={bb_width:.3f}")
-        return RegimeReading(Regime.NEUTRAL, adx_v, atr_pct, bb_width, vol_z, note="no regime match")
+        # 3) Range — ADX 가 추세 임계 미만이면 무조건 RANGE.
+        #    (Mean-Reversion 전략은 RSI<30 AND price<BB_lower 를 다시 요구하므로
+        #     실제 진입 빈도는 안전하게 제한된다.)
+        if not math.isnan(adx_v):
+            return RegimeReading(Regime.RANGE, adx_v, atr_pct, bb_width, vol_z,
+                                 note=f"adx={adx_v:.1f} bb={bb_width:.3f}")
+        # 4) NEUTRAL — 지표 계산 실패 시에만
+        return RegimeReading(Regime.NEUTRAL, adx_v, atr_pct, bb_width, vol_z, note="adx NaN")

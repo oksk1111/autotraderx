@@ -109,7 +109,9 @@ class FeeViabilityGuard:
 
 class LiquidityGuard:
     name = "Liquidity"
-    def __init__(self, min_24h_quote: float = 50_000_000_000.0, max_spread_pct: float = 0.003):
+    # 기획서 §5.3: 24h 거래대금 < 50억 KRW 또는 스프레드 > 0.3% 차단
+    # (코드 v5.0 초기 버전에 50_000_000_000(=500억) 으로 들어가 있어 KRW-ETH 도 항상 BLOCK 되던 버그를 수정)
+    def __init__(self, min_24h_quote: float = 5_000_000_000.0, max_spread_pct: float = 0.003):
         self.min_24h_quote = min_24h_quote
         self.max_spread_pct = max_spread_pct
     def check(self, ctx: RiskContext, signal: Signal) -> GuardResult:
