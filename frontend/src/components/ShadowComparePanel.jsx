@@ -12,7 +12,7 @@ function ShadowComparePanel() {
   const q = useQuery(["shadow-compare"], async () => {
     const { data } = await api.get("/shadow/compare?days=7");
     return data;
-  }, { refetchInterval: 30000 });
+  });
 
   const series = (q.data?.series || []).slice(-30);
   if (!series.length) {

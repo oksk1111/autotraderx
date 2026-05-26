@@ -16,7 +16,7 @@ function StrategyStatus() {
   const q = useQuery(["strategy-status"], async () => {
     const { data } = await api.get("/strategy/status");
     return data;
-  }, { refetchInterval: 10000 });
+  });
 
   if (q.isLoading) return <div className="loading">Loading regime…</div>;
   const d = q.data;

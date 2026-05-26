@@ -11,12 +11,12 @@ function RiskPanel() {
   const stateQ = useQuery(["risk-state"], async () => {
     const { data } = await api.get("/risk/state");
     return data;
-  }, { refetchInterval: 5000 });
+  });
 
   const eventsQ = useQuery(["risk-events"], async () => {
     const { data } = await api.get("/risk/events?limit=20");
     return data;
-  }, { refetchInterval: 15000 });
+  });
 
   const toggleMutation = useMutation(
     (enable) => api.post("/risk/kill-switch", { enable, close_positions: closePositions }),

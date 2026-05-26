@@ -11,8 +11,7 @@ function TradingConfigPanel() {
     async () => {
       const { data } = await api.get("/config/");
       return data;
-    },
-    { refetchInterval: 10000 }
+    }
   );
 
   const updateMutation = useMutation(

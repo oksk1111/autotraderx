@@ -9,8 +9,7 @@ function AccountInfo() {
     async () => {
       const { data } = await api.get("/account/balance");
       return data;
-    },
-    { refetchInterval: 10000 } // 10초마다 갱신
+    }
   );
 
   if (isLoading) {
