@@ -17,7 +17,7 @@
 | 의사결정 | ML 단기가격예측 + LLM 검증 | **결정론적 규칙 + Regime Switching** |
 | 전략 | 6+ 동시 실행 | **Trend-Following** ↔ **Mean Reversion** (regime별 1개) |
 | 포지션 사이징 | 신뢰도 ×고정 비율 | **ATR 기반 1% Risk Sizing** |
-| 기본 모드 | 라이브 자동매매 | **Paper Trading (LIVE_TRADING_ENABLED=false)** |
+| 기본 모드 | 라이브 자동매매 | **Live Trading (LIVE_TRADING_ENABLED=true)** |
 | Kill switch | 부분 작동 | **API 1초 내 정지** |
 | 백테스트 | 없음 | **이벤트드리븐 백테스터 + 메트릭** |
 | ML/LLM | 의사결정자 | **보조 필터 / 뉴스 차단용으로만** |
@@ -36,8 +36,8 @@ REDIS_HOST=redis
 UPBIT_ACCESS_KEY=
 UPBIT_SECRET_KEY=
 
-# v5 안전 플래그 — 기본 false
-LIVE_TRADING_ENABLED=false
+# 실전 매매 플래그 — 기본 true
+LIVE_TRADING_ENABLED=true
 
 TRACKED_MARKETS=KRW-BTC,KRW-ETH
 
@@ -88,15 +88,13 @@ python -m app.backtest.backtester --markets KRW-BTC,KRW-ETH --days 90 --strategy
 
 ## 운영 절차
 
-1. **Day 1~14**: `LIVE_TRADING_ENABLED=false`. Paper-only 가동, 매일 메트릭 관찰.
-   - **이 기간에도 시스템은 완전 자동으로 Paper 매매를 수행**한다. 거래가 0건이면 버그 신호다 (아래 §트러블슈팅).
-2. **Go-Live 체크** (기획서 §12.2):
-   - Paper 14일 누적 PnL ≥ 0%
-   - Paper MDD ≤ -5%
-   - 일일 평균 거래 ≤ 4
+1. **Live 운영**: `LIVE_TRADING_ENABLED=true`. Upbit API 키가 있고 사용 가능 KRW가 최소 주문 금액 이상이면 LiveBroker 가 실거래 주문을 발행한다.
+   - 시스템은 비교용 Paper 기록도 함께 남긴다. `live_ok=false` 이면 `/api/dashboard/logs` 의 `live_err` 와 `/api/risk/events` 를 먼저 확인한다.
+2. **운영 체크**:
+   - Upbit API 키의 조회/거래 권한과 IP 허용 목록 확인
+   - 사용 가능 KRW가 최소 주문 금액 + 수수료 이상인지 확인
    - Kill switch 1초 내 동작 확인
-3. **라이브 전환**: 서버 `.env` 에 `LIVE_TRADING_ENABLED=true` 설정 후 `systemctl restart autotrader-backend` 재기동. 이후 사용자의 추가 개입 없이 LiveBroker 가 실거래 주문을 발행한다.
-4. **비상정지**:
+3. **비상정지**:
    ```bash
    curl -X POST http://158.180.71.84:8000/api/risk/kill-switch \
         -H "Content-Type: application/json" \
@@ -113,7 +111,10 @@ python -m app.backtest.backtester --markets KRW-BTC,KRW-ETH --days 90 --strategy
 2. **`GET /api/strategy/signals?limit=50`** — 신호 행이 누적되는지, rationale 이 어떤가?
    - `regime=NEUTRAL no regime match` 가 반복되면 → Regime classifier 사각지대 (v5.0 ↔ v5.1 에서 수정됨).
    - `breakout=False trend_up=False vol_ok=False` 가 계속이면 → 시장이 정말 횡보 중이고 Trend 조건 미충족.
-3. **`GET /api/risk/events?limit=50`** — BUY 가 어느 가드에서 막히는가?
+3. **`GET /api/dashboard/logs`** — BUY 로그의 `live_err` 확인.
+   - `insufficient live KRW` → 실전 주문 가능 KRW 부족.
+   - `order rejected: None` → Upbit 권한/IP/잔고 문제 가능성이 높음.
+4. **`GET /api/risk/events?limit=50`** — BUY 가 어느 가드에서 막히는가?
    - `Liquidity 24h volume X < Y` → 임계가 너무 높은지 (기획서 §5.3 = 50억 원 = `5_000_000_000`) 확인.
    - `position already open for market` → 이전 OPEN PaperPosition 이 청산 대기 중. 정상 동작 (관리 로직이 SL/TP/시간/regime change 청산을 자동 수행).
 4. **`GET /api/health/`** — WebSocket / DB / Redis 정상 여부.

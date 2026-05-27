@@ -38,14 +38,26 @@ class UpbitLiveBroker:
             self._client = pyupbit.Upbit(self.s.upbit_access_key, self.s.upbit_secret_key)
         return self._client
 
-    # --------------------------------------------------------------- interface
-    def get_equity(self) -> float:
-        u = self._upbit()
-        if u is None:
+    def get_available_krw(self) -> float:
+        client = self._upbit()
+        if client is None:
             return 0.0
         try:
-            balances = u.get_balances() or []
+            balance = client.get_balance("KRW")
+            return float(balance or 0.0)
+        except Exception as exc:
+            logger.warning("live get_available_krw failed: %s", exc)
+            return 0.0
+
+    # --------------------------------------------------------------- interface
+    def get_equity(self) -> float:
+        client = self._upbit()
+        if client is None:
+            return 0.0
+        try:
+            balances = client.get_balances() or []
             if not isinstance(balances, list):
+                logger.warning("live get_equity unexpected balances response: %s", balances)
                 return 0.0
             total = 0.0
             for b in balances:
@@ -91,20 +103,25 @@ class UpbitLiveBroker:
         if not self._enabled():
             order.error = "live disabled"
             return order
-        u = self._upbit()
-        if u is None:
+        client = self._upbit()
+        if client is None:
             order.error = "no upbit client"
             return order
         notional_krw = max(notional_krw, 6000.0)
+        available_krw = self.get_available_krw()
+        required_krw = notional_krw * (1.0 + self.s.fee_rate)
+        if available_krw < required_krw:
+            order.error = f"insufficient live KRW: available={available_krw:.0f}, required={required_krw:.0f}"
+            return order
         try:
-            res = u.buy_market_order(market, notional_krw)
+            res = client.buy_market_order(market, notional_krw)
             if not isinstance(res, dict) or "uuid" not in res:
-                order.error = f"order rejected: {res}"
+                order.error = f"order rejected: {res}; available_krw={available_krw:.0f}; requested={notional_krw:.0f}"
                 return order
             # poll for fill (best-effort)
             time.sleep(0.7)
             try:
-                detail = u.get_order(res["uuid"])
+                detail = client.get_order(res["uuid"])
                 trades = (detail or {}).get("trades") or []
                 if trades:
                     total_qty = sum(float(t["volume"]) for t in trades)
@@ -148,18 +165,18 @@ class UpbitLiveBroker:
         if not self._enabled():
             order.error = "live disabled"
             return order
-        u = self._upbit()
-        if u is None:
+        client = self._upbit()
+        if client is None:
             order.error = "no upbit client"
             return order
         try:
-            res = u.sell_market_order(market, qty)
+            res = client.sell_market_order(market, qty)
             if not isinstance(res, dict) or "uuid" not in res:
                 order.error = f"order rejected: {res}"
                 return order
             time.sleep(0.7)
             try:
-                detail = u.get_order(res["uuid"])
+                detail = client.get_order(res["uuid"])
                 trades = (detail or {}).get("trades") or []
                 total_qty = sum(float(t["volume"]) for t in trades) if trades else qty
                 total_funds = sum(float(t["funds"]) for t in trades) if trades else 0.0

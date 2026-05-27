@@ -94,8 +94,8 @@ class Settings(BaseSettings):
     # =========================================================================
     # v5.0 Capital First Rebuild — 신규 설정
     # =========================================================================
-    # 1) 라이브 매매 활성 (기본 false = Paper only)
-    live_trading_enabled: bool = False
+    # 1) 라이브 매매 활성 (기본 true = real Upbit orders when keys are configured)
+    live_trading_enabled: bool = True
 
     # 2) 리스크 관리
     risk_per_trade: float = 0.01          # 자본의 1%
