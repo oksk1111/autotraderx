@@ -141,41 +141,54 @@ class TradingEngine:
                 logger.info("[%s] BUY blocked by %s: %s", market, r.name, r.reason)
                 return signal
         # 6) Sizing
-        equity_for_sizing = self.live.get_equity() if self.s.live_trading_enabled else self.paper.get_equity()
+        equity_for_sizing = self.paper.get_equity()
         available_live_krw: float | None = None
         if self.s.live_trading_enabled:
+            live_equity = self.live.get_equity()
+            if live_equity > 0:
+                equity_for_sizing = live_equity
+            else:
+                self._log_risk(
+                    market,
+                    "LiveEquity",
+                    "WARN",
+                    "live equity unavailable; sizing from paper equity",
+                )
             available_live_krw = self.live.get_available_krw()
             if available_live_krw < MIN_UPBIT_ORDER_KRW * (1.0 + self.s.fee_rate):
                 self._log_risk(
                     market,
                     "LiveFunds",
-                    "BLOCK",
-                    f"available live KRW {available_live_krw:.0f} below minimum order",
+                    "WARN",
+                    f"live order skipped: available KRW {available_live_krw:.0f} below minimum order",
                 )
-                return signal
         sz = compute_position_size(equity_for_sizing, signal.price, signal.stop_price)
         if sz.notional_krw <= 0:
             self._log_risk(market, "Sizing", "BLOCK", sz.reason)
             return signal
-        if available_live_krw is not None:
+        live_skip_reason = ""
+        if available_live_krw is not None and available_live_krw < MIN_UPBIT_ORDER_KRW * (1.0 + self.s.fee_rate):
+            live_skip_reason = f"insufficient live KRW: available={available_live_krw:.0f}"
+        elif available_live_krw is not None:
             max_live_notional = available_live_krw / (1.0 + self.s.fee_rate)
             if sz.notional_krw > max_live_notional:
                 if max_live_notional < MIN_UPBIT_ORDER_KRW:
                     self._log_risk(
                         market,
                         "LiveFunds",
-                        "BLOCK",
-                        f"sized order {sz.notional_krw:.0f} exceeds available live KRW {available_live_krw:.0f}",
+                        "WARN",
+                        f"live order skipped: sized order {sz.notional_krw:.0f} exceeds available KRW {available_live_krw:.0f}",
                     )
-                    return signal
-                self._log_risk(
-                    market,
-                    "LiveFunds",
-                    "WARN",
-                    f"capped live order from {sz.notional_krw:.0f} to {max_live_notional:.0f} by available KRW",
-                )
-                sz.notional_krw = max_live_notional
-                sz.qty = sz.notional_krw / signal.price
+                    live_skip_reason = f"insufficient live KRW: available={available_live_krw:.0f}, required={sz.notional_krw:.0f}"
+                else:
+                    self._log_risk(
+                        market,
+                        "LiveFunds",
+                        "WARN",
+                        f"capped order from {sz.notional_krw:.0f} to {max_live_notional:.0f} by available KRW",
+                    )
+                    sz.notional_krw = max_live_notional
+                    sz.qty = sz.notional_krw / signal.price
 
         # 7) Fire both brokers
         po = self.paper.submit_market_buy(
@@ -183,15 +196,21 @@ class TradingEngine:
             stop_loss=signal.stop_price, take_profit=signal.target_price,
             strategy=signal.strategy,
         )
-        lo = self.live.submit_market_buy(
-            market, sz.notional_krw,
-            stop_loss=signal.stop_price, take_profit=signal.target_price,
-            strategy=signal.strategy,
-        )
+        lo = None
+        if self.s.live_trading_enabled and not live_skip_reason:
+            lo = self.live.submit_market_buy(
+                market, sz.notional_krw,
+                stop_loss=signal.stop_price, take_profit=signal.target_price,
+                strategy=signal.strategy,
+            )
+        elif not self.s.live_trading_enabled:
+            live_skip_reason = "live disabled"
         self.state.daily_trade_count += 1
         self._log_trade(market, "BUY", sz.notional_krw,
                         rationale=f"{signal.strategy}/{signal.regime} {signal.rationale}",
-                        paper_ok=po.success, live_ok=lo.success, live_err=lo.error)
+                        paper_ok=po.success,
+                        live_ok=bool(lo and lo.success),
+                        live_err=(lo.error if lo else live_skip_reason))
         return signal
 
     # ==================================================== existing-position management

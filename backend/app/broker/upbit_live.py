@@ -7,9 +7,13 @@ from __future__ import annotations
 import time
 from typing import List, Optional
 
-import pyupbit
+try:
+    import pyupbit
+except ImportError:  # pragma: no cover - deployment dependency guard
+    pyupbit = None
 
 from app.core.config import get_settings
+from app.core.http_timeout import install_default_requests_timeout
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.marketdata import get_store
@@ -17,6 +21,7 @@ from app.models import TradePosition
 from .base import Broker, Order, OrderSide, Position
 
 logger = get_logger(__name__)
+install_default_requests_timeout()
 
 
 class UpbitLiveBroker:
@@ -29,7 +34,12 @@ class UpbitLiveBroker:
 
     # ------------------------------------------------------------------ utils
     def _enabled(self) -> bool:
-        return bool(self.s.live_trading_enabled and self.s.upbit_access_key and self.s.upbit_secret_key)
+        return bool(
+            pyupbit is not None
+            and self.s.live_trading_enabled
+            and self.s.upbit_access_key
+            and self.s.upbit_secret_key
+        )
 
     def _upbit(self) -> Optional[pyupbit.Upbit]:
         if not self._enabled():

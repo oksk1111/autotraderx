@@ -2,19 +2,33 @@
 계정 정보 및 잔고 API
 """
 from fastapi import APIRouter
-import pyupbit
+try:
+    import pyupbit
+except ImportError:  # pragma: no cover - deployment dependency guard
+    pyupbit = None
+
 from app.core.config import get_settings
+from app.core.http_timeout import install_default_requests_timeout
 from app.core.logging import get_logger
 
 router = APIRouter()
 settings = get_settings()
 logger = get_logger(__name__)
+install_default_requests_timeout()
 
 
 @router.get("/balance")
 def get_account_balance():
     """실시간 계정 잔고 조회"""
     try:
+        if pyupbit is None:
+            return {
+                "total_krw": 0,
+                "total_asset_value": 0,
+                "holdings": [],
+                "error": "pyupbit is not installed"
+            }
+
         if not settings.upbit_access_key or not settings.upbit_secret_key:
             logger.warning("Upbit keys are missing.")
             return {
