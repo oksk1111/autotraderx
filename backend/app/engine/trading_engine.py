@@ -26,7 +26,7 @@ from app.broker import Broker, PaperBroker, UpbitLiveBroker
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
-from app.marketdata import get_store
+from app.marketdata import get_store, get_active_markets
 from app.models import (
     PaperAccount, PaperPosition, RiskEvent, ShadowCompare, StrategySignal,
     TradeLog, TradePosition,
@@ -69,12 +69,12 @@ class TradingEngine:
 
     # ====================================================================== entry
     def evaluate_all(self) -> None:
-        """One full sweep across all tracked markets."""
+        """One full sweep across all active (dynamic) markets."""
         self._reset_daily_if_needed()
         if get_kill_switch().is_enabled():
             logger.warning("Kill switch ON — engine evaluate_all skipped")
             return
-        for market in self.s.tracked_markets:
+        for market in get_active_markets():
             try:
                 self.evaluate_market(market)
             except Exception as e:
@@ -166,6 +166,18 @@ class TradingEngine:
         if sz.notional_krw <= 0:
             self._log_risk(market, "Sizing", "BLOCK", sz.reason)
             return signal
+        # Portfolio-level exposure cap: total open notional must stay within
+        # max_portfolio_exposure × equity so the dynamic basket cannot over-leverage.
+        budget = equity_for_sizing * self.s.max_portfolio_exposure
+        open_notional = self._current_open_notional()
+        remaining = budget - open_notional
+        if remaining < MIN_UPBIT_ORDER_KRW:
+            self._log_risk(market, "PortfolioExposure", "BLOCK",
+                           f"exposure {open_notional:.0f}/{budget:.0f} — no room")
+            return signal
+        if sz.notional_krw > remaining:
+            sz.notional_krw = remaining
+            sz.qty = sz.notional_krw / signal.price
         live_skip_reason = ""
         if available_live_krw is not None and available_live_krw < MIN_UPBIT_ORDER_KRW * (1.0 + self.s.fee_rate):
             live_skip_reason = f"insufficient live KRW: available={available_live_krw:.0f}"
@@ -296,6 +308,16 @@ class TradingEngine:
         return ""
 
     # ============================================================== risk context
+    def _current_open_notional(self) -> float:
+        """Sum of open paper-position notional (canonical exposure basis)."""
+        try:
+            with SessionLocal() as db:
+                rows = db.query(PaperPosition).filter(PaperPosition.status == "OPEN").all()
+                return float(sum((p.size or 0.0) * (p.entry_price or 0.0) for p in rows))
+        except Exception as e:  # noqa
+            logger.warning("current_open_notional failed: %s", e)
+            return 0.0
+
     def _build_risk_context(self, market: str) -> RiskContext:
         equity = self.paper.get_equity()  # use paper as canonical equity
         if self.state.daily_start_equity == 0:

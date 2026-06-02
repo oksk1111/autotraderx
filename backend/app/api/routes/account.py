@@ -108,3 +108,55 @@ def get_account_balance():
             "total_positions": 0,
             "error": str(e)
         }
+
+
+@router.get("/diagnostics")
+def account_diagnostics():
+    """Connectivity diagnostics for trading/balance failures.
+
+    Surfaces the most common root causes (missing keys, IP not whitelisted,
+    network errors) so the operator can tell server vs API vs code issues apart.
+    """
+    result = {
+        "pyupbit_installed": pyupbit is not None,
+        "keys_configured": bool(settings.upbit_access_key and settings.upbit_secret_key),
+        "live_trading_enabled": settings.live_trading_enabled,
+        "outbound_ip": None,
+        "balance_ok": False,
+        "error": None,
+        "hint": None,
+    }
+
+    # Outbound IP — must match the IP whitelisted in the Upbit API console.
+    try:
+        import requests as _rq
+        result["outbound_ip"] = _rq.get("https://api.ipify.org", timeout=5).text.strip()
+    except Exception as exc:  # noqa
+        result["outbound_ip"] = f"unknown ({exc})"
+
+    if pyupbit is None:
+        result["hint"] = "pyupbit is not installed on the server."
+        return result
+    if not result["keys_configured"]:
+        result["hint"] = "Set UPBIT_ACCESS_KEY / UPBIT_SECRET_KEY in the server .env."
+        return result
+
+    try:
+        upbit = pyupbit.Upbit(settings.upbit_access_key, settings.upbit_secret_key)
+        balances = upbit.get_balances()
+        if hasattr(balances, "get") and balances.get("error"):
+            result["error"] = balances.get("error")
+            result["hint"] = (
+                "Upbit rejected the request. If 'no_authorization_ip', add the "
+                f"server outbound IP ({result['outbound_ip']}) to the API key's "
+                "allowed IP list in the Upbit console."
+            )
+        elif isinstance(balances, list):
+            result["balance_ok"] = True
+            result["hint"] = "Upbit API reachable and authorized."
+        else:
+            result["error"] = f"unexpected response: {type(balances).__name__}"
+    except Exception as exc:  # noqa
+        result["error"] = str(exc)
+        result["hint"] = "Network/exchange error reaching Upbit from the server."
+    return result

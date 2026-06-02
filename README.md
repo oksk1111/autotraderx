@@ -1,10 +1,26 @@
-# AutoTraderX v5.0 — Capital First Rebuild
+# AutoTraderX v7.0 — Dynamic Portfolio
 
 > **WARNING — 본 프로젝트는 실거래 자금 손실을 일으킬 수 있습니다.**
 > v4.x 운영에서 실제 -91.23% 손실이 발생했고, 그 사후 분석을 바탕으로 v5.0이 다시 쓰여졌습니다.
-> v5.0은 수익 극대화가 아니라 **자본 보존**을 1순위 목표로 합니다.
+> v5/v6은 **자본 보존**을, **v7.0은 그 위에 동적 포트폴리오(유망 코인 자동 선별)**를 더했습니다.
 
-상세 기획: [docs/가상화폐 자동 매매 기획 5.md](docs/가상화폐%20자동%20매매%20기획%205.md)
+상세 기획: [docs/가상화폐 자동 매매 기획 6.md](docs/가상화폐%20자동%20매매%20기획%206.md) · [기획 5](docs/가상화폐%20자동%20매매%20기획%205.md)
+
+---
+
+## v7.0 핵심 변경 (Dynamic Portfolio)
+
+| 항목 | v5/v6 | **v7.0** |
+|---|---|---|
+| 종목 선택 | 고정 `KRW-BTC, KRW-ETH` | **전체 KRW 마켓 동적 선별** (유동성 + 모멘텀, 매 15분 재선정) |
+| 동시 포지션 | 1개 | **최대 4개 포트폴리오** + 총 노출 90% 캡 |
+| 시세 구독 | 고정 구독 | **유니버스 변경 시 WebSocket 자동 재구독** |
+| 과열/스테이블 | - | 24h +30% 초과·스테이블코인 자동 제외 |
+| 진단 | 로그 의존 | **`GET /api/account/diagnostics`** (키/IP/네트워크 원인 즉시 식별) |
+
+> 투자 기법: **Cross-sectional Momentum + Liquidity 필터로 유망 코인을 선별**하고,
+> 각 코인에 **레짐 적응형 진입**(추세=Donchian 돌파, 횡보=RSI/볼린저 평균회귀)과
+> **1% 리스크 사이징**을 적용한다.
 
 ---
 
@@ -39,13 +55,21 @@ UPBIT_SECRET_KEY=
 # 실전 매매 플래그 — 기본 true
 LIVE_TRADING_ENABLED=true
 
+# 동적 포트폴리오 (v7.0)
+DYNAMIC_UNIVERSE_ENABLED=true
+UNIVERSE_SIZE=6
+UNIVERSE_REFRESH_SEC=900
+UNIVERSE_MIN_VALUE_24H=30000000000
+UNIVERSE_ALWAYS_INCLUDE=KRW-BTC,KRW-ETH
+# TRACKED_MARKETS 는 동적 유니버스의 seed/anchor 역할만 한다.
 TRACKED_MARKETS=KRW-BTC,KRW-ETH
 
 RISK_PER_TRADE=0.01
-MAX_OPEN_POSITIONS=1
+MAX_OPEN_POSITIONS=4
 MAX_POSITION_RATIO=0.25
+MAX_PORTFOLIO_EXPOSURE=0.90
 DAILY_LOSS_LIMIT=0.03
-MAX_DAILY_TRADES=6
+MAX_DAILY_TRADES=12
 COOLDOWN_AFTER_LOSS_MIN=30
 
 STRATEGY_MODE=auto
@@ -107,6 +131,8 @@ python -m app.backtest.backtester --markets KRW-BTC,KRW-ETH --days 90 --strategy
 
 운영 중 `daily_trade_count == 0` 상태가 지속될 때 점검 순서:
 
+0. **`GET /api/strategy/status`** — `active_markets`(동적 유니버스)가 채워지는지 확인.
+   - 비어 있거나 BTC/ETH만 있으면 → `DYNAMIC_UNIVERSE_ENABLED=true` 와 네트워크(업비트 REST) 확인.
 1. **`GET /api/strategy/status`** 호출 — `live_trading_enabled` / `regime` 확인.
 2. **`GET /api/strategy/signals?limit=50`** — 신호 행이 누적되는지, rationale 이 어떤가?
    - `regime=NEUTRAL no regime match` 가 반복되면 → Regime classifier 사각지대 (v5.0 ↔ v5.1 에서 수정됨).
@@ -126,6 +152,30 @@ python -m app.backtest.backtester --markets KRW-BTC,KRW-ETH --days 90 --strategy
 | `LiquidityGuard.min_24h_quote` | `50_000_000_000` (500억, 단위 오타 — KRW-ETH 도 상시 BLOCK) | `5_000_000_000` (기획서 §5.3 = 50억) |
 | Regime classifier | ADX 18~25 가 NEUTRAL 사각지대 → 모든 전략 비활성 | ADX < 25 = RANGE 로 단순화 (Mean-Reversion 내부에서 RSI/BB 재검증) |
 | 기획서 §4.1 / §5.3 | 위 두 항목 명시 누락 | 본 README + 기획서에 명시 |
+
+---
+
+## 트러블슈팅 — "잔고 조회가 안 됩니다 / 매매가 멈췄습니다" (v7.0)
+
+잔고 조회 실패는 대부분 **코드가 아니라 업비트 API 키의 허용 IP 문제**다.
+
+1. **`GET /api/account/diagnostics`** 호출 — 한 번에 원인을 분리한다.
+   ```json
+   {
+     "keys_configured": true,
+     "outbound_ip": "158.180.71.84",
+     "balance_ok": false,
+     "error": {"name": "no_authorization_ip", ...},
+     "hint": "add the server outbound IP to the API key's allowed IP list"
+   }
+   ```
+2. `keys_configured=false` → 서버 `.env` 에 `UPBIT_ACCESS_KEY/SECRET_KEY` 설정.
+3. `error.name == no_authorization_ip` → **업비트 Open API 콘솔에서 `outbound_ip` 를 허용 IP 에 등록.**
+4. `balance_ok=true` 인데 매매가 없으면 → 위 "거래가 한 건도 안 됩니다" 절차로 이동.
+
+> v7.0 부터 WebSocket 피드는 유니버스 변경 시 자동 재구독하며, 피드가 끊겨도
+> 지수 백오프로 재연결한다. 그래도 모든 마켓이 `stale_sec` 가 크면 서버 아웃바운드
+> 네트워크(방화벽/DNS)를 점검한다.
 
 ---
 

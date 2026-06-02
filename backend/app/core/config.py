@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     kakao_redirect_uri: str = "http://localhost:4173/auth/kakao/callback"
 
     default_trade_amount: float = 10_000  # v6.0: 잔고 보호 (40K 기준)
-    max_open_positions: int = 1  # v6.0: 단일 포지션만 (자본 보존)
+    max_open_positions: int = 4  # v7.0: 동적 포트폴리오 (유망 코인 분산)
     stop_loss_percent: float = 1.5  # v6.0: -1.5% 손절 (타이트)
     take_profit_percent: float = 3.0  # v6.0: +3% 익절 (손익비 1:2)
     max_position_hold_minutes: int = 60  # v6.0: 충분한 시간 부여 (30분→60분)
@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     min_confidence_for_trade: float = 0.75  # 최소 신뢰도 75% (0.6→0.75)
     max_investment_ratio: float = 0.25    # 단일 거래 최대 투자비율 25%
     cooldown_after_loss_minutes: int = 30  # 손절 후 30분 쿨다운
-    max_daily_trades: int = 6             # 일일 최대 거래 횟수 6회
+    max_daily_trades: int = 12            # v7.0: 동적 포트폴리오 (코인 수 증가 반영)
     llm_autotrading_enabled: bool = True
 
     # 급등 스트리밍 알림 (WebSocket, alert-only)
@@ -89,7 +89,21 @@ class Settings(BaseSettings):
     surge_alert_cooldown_seconds: int = 180
     surge_alert_min_volume_24h: float = 35_000_000_000
 
-    tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH"]  # v5: 메이저 2개 기본
+    # v7.0: tracked_markets 는 동적 유니버스의 fallback / 시드 역할만 한다.
+    tracked_markets: List[str] = ["KRW-BTC", "KRW-ETH"]  # seed/anchor markets
+
+    # =========================================================================
+    # v7.0 Dynamic Portfolio — 유망 코인 자동 선별 (Cross-sectional momentum)
+    # =========================================================================
+    dynamic_universe_enabled: bool = True      # 동적 유니버스 on/off
+    universe_size: int = 6                     # 동시에 추적/매매할 유망 코인 수
+    universe_refresh_sec: int = 900            # 유니버스 재선정 주기 (15분)
+    universe_min_value_24h: float = 30_000_000_000  # 최소 24h 거래대금 (유동성 필터)
+    universe_max_spread_pct: float = 0.005     # 진입 허용 최대 스프레드 (0.5%)
+    universe_momentum_window: int = 24         # 모멘텀 평가 캔들 수 (15m * 24 = 6h)
+    universe_always_include: List[str] = ["KRW-BTC", "KRW-ETH"]  # 항상 포함 앵커
+    universe_exclude: List[str] = []           # 제외할 마켓 (스테이블코인 등)
+    max_portfolio_exposure: float = 0.90       # 총 포지션 노출 상한 (자본 대비)
 
     # =========================================================================
     # v5.0 Capital First Rebuild — 신규 설정

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.engine import get_engine
-from app.marketdata import get_store
+from app.marketdata import get_store, get_active_markets
 from app.models import StrategySignal
 from app.strategy.regime import RegimeClassifier
 
@@ -20,8 +20,9 @@ def strategy_status() -> dict:
     store = get_store()
     engine = get_engine()
     classifier = RegimeClassifier()
+    active_markets = get_active_markets()
     markets = []
-    for m in s.tracked_markets:
+    for m in active_markets:
         candles_1m = store.get_candles(m, "1m")
         reading = classifier.classify(candles_1m) if candles_1m else None
         t = store.get_ticker(m)
@@ -35,7 +36,10 @@ def strategy_status() -> dict:
     return {
         "mode": s.strategy_mode,
         "live_trading_enabled": s.live_trading_enabled,
-        "tracked_markets": s.tracked_markets,
+        "dynamic_universe_enabled": s.dynamic_universe_enabled,
+        "universe_size": s.universe_size,
+        "tracked_markets": active_markets,
+        "active_markets": active_markets,
         "daily_trade_count": engine.state.daily_trade_count,
         "daily_realized_pnl_krw": engine.state.daily_realized_pnl_krw,
         "daily_start_equity": engine.state.daily_start_equity,

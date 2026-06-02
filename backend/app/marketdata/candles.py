@@ -57,9 +57,23 @@ class CandleBuilder:
         self._listeners.append(callback)
 
     async def bootstrap_history(self, count_per_tf: int = 200) -> None:
-        """Pull historical candles from Upbit REST for each (market, tf)."""
+        """Pull historical candles from Upbit REST for each configured market."""
+        await self.bootstrap_markets(self.markets, count_per_tf=count_per_tf)
+
+    async def bootstrap_markets(self, markets: List[str], count_per_tf: int = 200) -> None:
+        """Pull historical candles from Upbit REST for the given markets.
+
+        Used both for the initial warm-up and for newly added dynamic-universe
+        markets so the engine has enough bars to classify regime immediately.
+        """
+        if not markets:
+            return
+        # Track so candle synthesis / staleness checks know about them.
+        for m in markets:
+            if m not in self.markets:
+                self.markets.append(m)
         async with aiohttp.ClientSession() as session:
-            for market in self.markets:
+            for market in markets:
                 for tf in ("1m", "5m", "15m"):
                     unit = int(_TF_SECONDS[tf] // 60)
                     url = _UPBIT_REST.format(unit=unit)

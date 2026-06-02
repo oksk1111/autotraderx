@@ -14,6 +14,7 @@ from app.broker import PaperBroker, UpbitLiveBroker
 from app.core.config import get_settings
 from app.db.session import get_db, SessionLocal
 from app.engine import get_engine
+from app.marketdata import get_active_markets
 from app.models import (
     MLDecisionLog, PaperPosition, StrategySignal, TradeLog, TradePosition, RiskEvent, ShadowCompare, AutoTradingConfig
 )
@@ -70,7 +71,7 @@ def get_snapshot() -> dict:
     engine = get_engine()
     paper = PaperBroker()
     return {
-        "tracked_markets": s.tracked_markets,
+        "tracked_markets": get_active_markets(),
         "strategy_mode": s.strategy_mode,
         "live_trading_enabled": s.live_trading_enabled,
         "paper_equity": paper.get_equity(),
@@ -120,7 +121,7 @@ async def websocket_dashboard(websocket: WebSocket):
                     }
 
                     snapshot_data = {
-                        "tracked_markets": s.tracked_markets,
+                        "tracked_markets": get_active_markets(),
                         "strategy_mode": s.strategy_mode,
                         "live_trading_enabled": s.live_trading_enabled,
                         "paper_equity": paper.get_equity(),
