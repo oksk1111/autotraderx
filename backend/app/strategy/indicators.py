@@ -157,3 +157,123 @@ def volume_zscore(volumes: Sequence[float], period: int = 60) -> float:
     if sd == 0:
         return 0.0
     return (volumes[-1] - mean) / sd
+
+
+def macd(
+    values: Sequence[float],
+    fast_period: int = 12,
+    slow_period: int = 26,
+    signal_period: int = 9,
+) -> Tuple[float, float, float]:
+    """MACD indicator. Returns (macd_line, signal_line, histogram).
+    
+    Args:
+        values: Price series (typically closes)
+        fast_period: Fast EMA period (default 12)
+        slow_period: Slow EMA period (default 26)
+        signal_period: Signal line EMA period (default 9)
+        
+    Returns:
+        Tuple of (macd_line, signal_line, histogram)
+    """
+    if len(values) < slow_period + signal_period:
+        return (_nan(), _nan(), _nan())
+    
+    # Calculate EMAs
+    fast_ema = ema(values, fast_period)
+    slow_ema = ema(values, slow_period)
+    
+    # MACD line
+    macd_line = fast_ema - slow_ema
+    
+    # For signal line, we need MACD history
+    macd_history: List[float] = []
+    k_fast = 2 / (fast_period + 1)
+    k_slow = 2 / (slow_period + 1)
+    
+    ema_fast = float(values[0])
+    ema_slow = float(values[0])
+    
+    for v in values[1:]:
+        ema_fast = float(v) * k_fast + ema_fast * (1 - k_fast)
+        ema_slow = float(v) * k_slow + ema_slow * (1 - k_slow)
+        macd_history.append(ema_fast - ema_slow)
+    
+    if len(macd_history) < signal_period:
+        return (macd_line, _nan(), _nan())
+    
+    # Signal line (EMA of MACD)
+    signal_line = ema(macd_history, signal_period)
+    
+    # Histogram
+    histogram = macd_line - signal_line
+    
+    return (macd_line, signal_line, histogram)
+
+
+def stochastic(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    k_period: int = 14,
+    d_period: int = 3,
+) -> Tuple[float, float]:
+    """Stochastic oscillator. Returns (%K, %D)."""
+    if len(closes) < k_period + d_period:
+        return (_nan(), _nan())
+    
+    # Calculate %K values
+    k_values: List[float] = []
+    for i in range(k_period - 1, len(closes)):
+        window_high = max(highs[i - k_period + 1:i + 1])
+        window_low = min(lows[i - k_period + 1:i + 1])
+        if window_high == window_low:
+            k_values.append(50.0)
+        else:
+            k_values.append(100 * (closes[i] - window_low) / (window_high - window_low))
+    
+    if len(k_values) < d_period:
+        return (_nan(), _nan())
+    
+    # %K is the last value
+    k = k_values[-1]
+    
+    # %D is SMA of %K
+    d = sum(k_values[-d_period:]) / d_period
+    
+    return (k, d)
+
+
+def obv(closes: Sequence[float], volumes: Sequence[float]) -> float:
+    """On-Balance Volume. Returns cumulative OBV."""
+    if len(closes) < 2 or len(volumes) < 2:
+        return _nan()
+    
+    obv_val = 0.0
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            obv_val += volumes[i]
+        elif closes[i] < closes[i - 1]:
+            obv_val -= volumes[i]
+    
+    return obv_val
+
+
+def vwap(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    volumes: Sequence[float],
+) -> float:
+    """Volume Weighted Average Price."""
+    if not closes or not volumes:
+        return _nan()
+    
+    typical_prices = [(h + l + c) / 3 for h, l, c in zip(highs, lows, closes)]
+    cumulative_tp_vol = sum(tp * v for tp, v in zip(typical_prices, volumes))
+    cumulative_vol = sum(volumes)
+    
+    if cumulative_vol == 0:
+        return _nan()
+    
+    return cumulative_tp_vol / cumulative_vol

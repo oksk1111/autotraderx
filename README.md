@@ -1,10 +1,37 @@
-# AutoTraderX v7.0 — Dynamic Portfolio
+# AutoTraderX v8.0 — Hybrid LLM + Mechanical Trading
 
 > **WARNING — 본 프로젝트는 실거래 자금 손실을 일으킬 수 있습니다.**
 > v4.x 운영에서 실제 -91.23% 손실이 발생했고, 그 사후 분석을 바탕으로 v5.0이 다시 쓰여졌습니다.
-> v5/v6은 **자본 보존**을, **v7.0은 그 위에 동적 포트폴리오(유망 코인 자동 선별)**를 더했습니다.
+> v5/v6은 자본 보존을, v7.0은 동적 포트폴리오를, **v8.0은 LLM 기반 하이브리드 트레이딩**을 더했습니다.
 
 상세 기획: [docs/가상화폐 자동 매매 기획 6.md](docs/가상화폐%20자동%20매매%20기획%206.md) · [기획 5](docs/가상화폐%20자동%20매매%20기획%205.md)
+
+---
+
+## v8.0 핵심 변경 (Hybrid LLM Trading)
+
+| 항목 | v7.0 | **v8.0** |
+|---|---|---|
+| 전략 | Regime-based (Trend/Range) | **Hybrid (LLM + Mechanical Confluence)** |
+| LLM 역할 | 보조 필터 | **핵심 의사결정자** (Groq Llama 3.3 70B) |
+| 진입 조건 | 모든 조건 충족 필요 | **2/3 조건 충족 + LLM 동의** (완화됨) |
+| 신뢰도 | 고정 | **Multi-factor Confluence Score** |
+| 시장 센티먼트 | 없음 | **김치 프리미엄 + Fear & Greed 분석** |
+| 추가 전략 | 2개 (Trend/Range) | **5개** (Hybrid/Momentum/Dip/Trend/Range) |
+
+> **v8.0 투자 기법**: 기계적 기술 지표 분석과 LLM의 인간적 판단을 결합.
+> Confluence Score가 임계값을 넘고 LLM이 동의할 때만 진입하여 
+> 높은 승률과 적절한 매매 빈도를 동시에 달성.
+
+### 새로운 전략들
+
+| 전략 | 설명 | 최적 시장 |
+|---|---|---|
+| **hybrid_v8** | LLM + 기술적 분석 융합 (기본값) | 모든 시장 |
+| aggressive_momentum | 강한 모멘텀 돌파 추종 | 추세 시장 |
+| dip_buying | 상승 추세 내 눌림목 매수 | 조정 구간 |
+| trend_following | Donchian 돌파 + EMA 필터 | 강한 추세 |
+| mean_reversion | RSI + 볼린저 평균회귀 | 횡보 구간 |
 
 ---
 
@@ -55,6 +82,13 @@ UPBIT_SECRET_KEY=
 # 실전 매매 플래그 — 기본 true
 LIVE_TRADING_ENABLED=true
 
+# LLM 설정 (v8.0)
+USE_AI_VERIFICATION=true
+USE_GROQ=true
+GROQ_API_KEY=your_groq_api_key_here
+GROQ_MODEL=llama-3.3-70b-versatile
+LLM_AUTOTRADING_ENABLED=true
+
 # 동적 포트폴리오 (v7.0)
 DYNAMIC_UNIVERSE_ENABLED=true
 UNIVERSE_SIZE=6
@@ -72,7 +106,14 @@ DAILY_LOSS_LIMIT=0.03
 MAX_DAILY_TRADES=12
 COOLDOWN_AFTER_LOSS_MIN=30
 
-STRATEGY_MODE=auto
+# 전략 모드 (v8.0)
+# hybrid: LLM + mechanical (기본값, 추천)
+# auto: hybrid 동일
+# trend: 추세 추종만
+# range: 평균회귀만
+# momentum: 공격적 모멘텀
+# dip: 눌림목 매수
+STRATEGY_MODE=hybrid
 ```
 
 ### 2. 백엔드

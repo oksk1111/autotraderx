@@ -37,6 +37,7 @@ from app.risk import (
 from app.risk.sizing import MIN_UPBIT_ORDER_KRW
 from app.strategy import (
     MeanReversionStrategy, Regime, RegimeClassifier, Signal, TrendFollowingStrategy,
+    HybridStrategy, AggressiveMomentumStrategy, DipBuyingStrategy,
 )
 
 logger = get_logger(__name__)
@@ -61,6 +62,9 @@ class TradingEngine:
         self.classifier = RegimeClassifier()
         self.trend = TrendFollowingStrategy()
         self.range = MeanReversionStrategy()
+        self.hybrid = HybridStrategy()  # v8.0: LLM + Mechanical hybrid
+        self.momentum = AggressiveMomentumStrategy()  # v8.0: Momentum strategy
+        self.dip = DipBuyingStrategy()  # v8.0: Dip buying strategy
         self.guards = RiskGuardChain()
         self.paper = PaperBroker()
         self.live = UpbitLiveBroker()
@@ -107,15 +111,21 @@ class TradingEngine:
             chosen = self.trend
         elif strategy_mode == "range":
             chosen = self.range
-        else:  # auto
-            if reading.regime == Regime.TREND:
-                chosen = self.trend
-            elif reading.regime == Regime.RANGE:
-                chosen = self.range
-            else:
+        elif strategy_mode == "hybrid":
+            # v8.0: Use hybrid LLM + mechanical strategy
+            chosen = self.hybrid
+        elif strategy_mode == "momentum":
+            chosen = self.momentum
+        elif strategy_mode == "dip":
+            chosen = self.dip
+        else:  # auto - default to hybrid in v8.0
+            # Hybrid strategy handles regime internally and uses LLM
+            chosen = self.hybrid
+            # Fallback to regime-based if hybrid not suitable
+            if reading.regime == Regime.CHAOS:
                 self._log_signal(market, reading.regime.value, "-", "HOLD",
                                  price=candles_1m[-1].close if candles_1m else 0.0,
-                                 rationale=f"regime={reading.regime.value} {reading.note}")
+                                 rationale=f"regime=CHAOS — too volatile, staying out")
                 return None
 
         signal = chosen.evaluate(market, candles_1m, candles_5m, candles_15m)
@@ -298,9 +308,17 @@ class TradingEngine:
             return "time>240m"
         if strategy == "mean_reversion" and elapsed_min > 90:
             return "time>90m"
+        if strategy == "hybrid_v8" and elapsed_min > 180:
+            return "time>180m"
+        if strategy == "aggressive_momentum" and elapsed_min > 60:
+            return "time>60m"
+        if strategy == "dip_buying" and elapsed_min > 240:
+            return "time>240m"
         if not strategy and elapsed_min > 240:
             return "time>240m"
-        # 4) regime change
+        # 4) regime change — exit if market becomes chaotic
+        if regime == Regime.CHAOS:
+            return f"regime→CHAOS"
         if strategy == "trend_following" and regime not in (Regime.TREND,):
             return f"regime→{regime.value}"
         if strategy == "mean_reversion" and regime not in (Regime.RANGE,):

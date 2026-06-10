@@ -119,7 +119,19 @@ class Settings(BaseSettings):
     slippage_est: float = 0.0005          # 슬리피지 추정
 
     # 3) 전략 모드
-    strategy_mode: str = "auto"           # auto | trend | range | off
+    # auto: hybrid (v8.0 default - LLM + mechanical)
+    # hybrid: LLM + mechanical confluence strategy
+    # trend: trend-following only
+    # range: mean-reversion only  
+    # momentum: aggressive momentum strategy
+    # dip: buy-the-dip strategy
+    # off: no trading
+    strategy_mode: str = "hybrid"           # v8.0: default to hybrid
+
+    # v8.0 Hybrid Strategy Settings
+    hybrid_min_confluence: float = 0.55     # Minimum score for entry (lowered for more trades)
+    hybrid_llm_weight: float = 0.35         # LLM contribution to final score
+    hybrid_use_multi_strategy: bool = True  # Use multiple strategies in parallel
 
     # 4) Kill switch (Redis key 와 매칭)
     kill_switch: bool = False
