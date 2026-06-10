@@ -13,20 +13,20 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ubuntu
-          key: ${{ secrets.ORACLE_SSH_KEY }}
-          port: 22
-          command_timeout: 40m  # 타임아웃 20분 -> 40분으로 증가
-          envs: UPBIT_ACCESS_KEY,UPBIT_SECRET_KEY,GROQ_API_KEY,POSTGRES_PASSWORD,SECRET_KEY
         env:
           UPBIT_ACCESS_KEY: ${{ secrets.UPBIT_ACCESS_KEY }}
           UPBIT_SECRET_KEY: ${{ secrets.UPBIT_SECRET_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
-        script: |
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ubuntu
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          port: 22
+          command_timeout: 40m
+          envs: UPBIT_ACCESS_KEY,UPBIT_SECRET_KEY,GROQ_API_KEY,POSTGRES_PASSWORD,SECRET_KEY
+          script: |
             set -e  # 오류 발생 시 즉시 중단
             # 1. 작업 디렉토리 확인 및 생성
             TARGET_DIR="/home/ubuntu/autotraderx"
