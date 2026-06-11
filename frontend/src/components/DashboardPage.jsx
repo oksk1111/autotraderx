@@ -16,7 +16,7 @@ function DashboardPage() {
   useEffect(() => {
     const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${wsProtocol}//${window.location.host}/api/dashboard/ws`;
-    
+
     let ws;
     let reconnectTimeout;
 
