@@ -5,15 +5,13 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.broker import PaperBroker, UpbitLiveBroker
+from app.broker import UpbitLiveBroker
 from app.core.config import get_settings
-from app.core.logging import get_logger
 from app.db.session import get_db
 from app.engine import get_engine
 from app.models import RiskEvent
 from app.risk import get_kill_switch
 
-logger = get_logger(__name__)
 router = APIRouter()
 
 
@@ -27,10 +25,10 @@ def risk_state() -> dict:
     s = get_settings()
     engine = get_engine()
     ks = get_kill_switch()
-    paper = PaperBroker()
+    live = UpbitLiveBroker()
     return {
         "kill_switch": ks.is_enabled(),
-        "live_trading_enabled": s.live_trading_enabled,
+        "live_trading_enabled": True,
         "daily_loss_limit": s.daily_loss_limit,
         "daily_realized_pnl_krw": engine.state.daily_realized_pnl_krw,
         "daily_start_equity": engine.state.daily_start_equity,
@@ -41,7 +39,7 @@ def risk_state() -> dict:
         "risk_per_trade": s.risk_per_trade,
         "cooldown_after_loss_minutes": s.cooldown_after_loss_minutes,
         "last_loss_unix": engine.state.last_loss_unix,
-        "current_equity_paper": paper.get_equity(),
+        "current_equity": live.get_equity(),
         "fee_rate": s.fee_rate,
         "slippage_est": s.slippage_est,
     }
@@ -74,14 +72,7 @@ def toggle_kill_switch(payload: KillSwitchPayload) -> dict:
     if payload.enable:
         ks.enable()
         if payload.close_positions:
-            paper = PaperBroker()
             live = UpbitLiveBroker()
-            for pos in paper.list_positions():
-                r = paper.submit_market_sell(pos.market, pos.qty)
-                if r.success:
-                    closed.append(f"paper:{pos.market}")
-                else:
-                    errors.append(f"paper:{pos.market}:{r.error}")
             for pos in live.list_positions():
                 r = live.submit_market_sell(pos.market, pos.qty)
                 if r.success:

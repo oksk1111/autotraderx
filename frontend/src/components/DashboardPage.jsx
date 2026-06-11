@@ -7,7 +7,6 @@ import AccountInfo from "./AccountInfo";
 import TradingConfigPanel from "./TradingConfigPanel";
 import StrategyStatus from "./StrategyStatus";
 import RiskPanel from "./RiskPanel";
-import ShadowComparePanel from "./ShadowComparePanel";
 
 const api = axios.create({ baseURL: "/api" });
 
@@ -35,7 +34,6 @@ function DashboardPage() {
           if (data["risk-events"]) queryClient.setQueryData(["risk-events"], data["risk-events"]);
           if (data.account) queryClient.setQueryData(["account"], data.account);
           if (data["strategy-status"]) queryClient.setQueryData(["strategy-status"], data["strategy-status"]);
-          if (data["shadow-compare"]) queryClient.setQueryData(["shadow-compare"], data["shadow-compare"]);
         } catch (err) {
           console.error("WS parse error:", err);
         }
@@ -76,19 +74,15 @@ function DashboardPage() {
     return data;
   });
 
-  const liveOn = metricsQuery.data?.live_trading_enabled;
-
   return (
     <div className="page">
       <header className="hero-header">
         <div>
           <h1>AutoTrader X</h1>
-          <p>Capital-First Regime-Switching Engine · v5.0</p>
+          <p>Capital-First Live Trading Engine · v8.0</p>
         </div>
         <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-          <span className={`badge ${liveOn ? "danger" : "secondary"}`}>
-            {liveOn ? "LIVE TRADING" : "PAPER ONLY"}
-          </span>
+          <span className="badge danger">LIVE TRADING</span>
           <span className="badge secondary">Risk 1% / Trade</span>
         </div>
       </header>
@@ -106,7 +100,6 @@ function DashboardPage() {
 
       <StrategyStatus />
       <RiskPanel />
-      <ShadowComparePanel />
 
       <TradeTable trades={tradesQuery.data} loading={tradesQuery.isLoading} />
     </div>

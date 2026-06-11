@@ -11,16 +11,15 @@ function MetricsGrid({ metrics, snapshot, loading }) {
   const pnlPct = startEq > 0 ? ((dailyPnl / startEq) * 100).toFixed(2) : "0.00";
 
   const items = [
-    { label: "Paper Equity", value: fmtKrw(metrics?.paper_equity) },
-    { label: "Live Equity", value: metrics?.live_trading_enabled ? fmtKrw(metrics?.live_equity) : "OFF" },
+    { label: "Live Equity", value: fmtKrw(metrics?.live_equity) },
     { label: "Daily P&L", value: `${fmtKrw(dailyPnl)} (${pnlPct}%)`, isPositive: dailyPnl >= 0 },
     { label: "Daily Trades", value: `${metrics?.daily_trade_count ?? 0}` },
-    { label: "Paper Open", value: metrics?.paper_open_positions ?? 0 },
+    { label: "Open Positions", value: metrics?.live_open_positions ?? 0 },
     { label: "Mode", value: (metrics?.strategy_mode ?? "auto").toUpperCase() },
   ];
 
   return (
-    <div className="grid-6">
+    <div className="grid-5">
       {items.map((item) => (
         <div key={item.label} className="stat-card">
           <div className="stat-label">{item.label}</div>

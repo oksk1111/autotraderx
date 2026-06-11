@@ -10,13 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.api.routes.account import get_account_balance
 from app.api.routes.strategy import strategy_status
-from app.broker import PaperBroker, UpbitLiveBroker
+from app.broker import UpbitLiveBroker
 from app.core.config import get_settings
 from app.db.session import get_db, SessionLocal
 from app.engine import get_engine
 from app.marketdata import get_active_markets
 from app.models import (
-    MLDecisionLog, PaperPosition, StrategySignal, TradeLog, TradePosition, RiskEvent, ShadowCompare, AutoTradingConfig
+    MLDecisionLog, StrategySignal, TradeLog, TradePosition, RiskEvent, AutoTradingConfig
 )
 from app.schemas.trading import MLDecisionLogSchema, TradeLogSchema, AutoTradingConfigSchema
 
@@ -26,23 +26,20 @@ router = APIRouter()
 @router.get("/metrics")
 def get_metrics(db: Session = Depends(get_db)) -> dict[str, Any]:
     s = get_settings()
-    paper = PaperBroker()
     live = UpbitLiveBroker()
     engine = get_engine()
     trade_count = db.query(TradeLog).count()
-    paper_open = db.query(PaperPosition).filter(PaperPosition.status == "OPEN").count()
     live_open = db.query(TradePosition).filter(TradePosition.status == "OPEN").count()
     latest_signal = db.query(StrategySignal).order_by(StrategySignal.created_at.desc()).first()
+    live_equity = live.get_equity()
     return {
         "trade_count": trade_count,
-        "paper_equity": paper.get_equity(),
-        "live_equity": live.get_equity() if s.live_trading_enabled else 0.0,
-        "paper_open_positions": paper_open,
+        "live_equity": live_equity,
         "live_open_positions": live_open,
         "daily_realized_pnl_krw": engine.state.daily_realized_pnl_krw,
         "daily_start_equity": engine.state.daily_start_equity,
         "daily_trade_count": engine.state.daily_trade_count,
-        "live_trading_enabled": s.live_trading_enabled,
+        "live_trading_enabled": True,  # Always live now
         "strategy_mode": s.strategy_mode,
         "last_signal": {
             "market": latest_signal.market,
@@ -69,12 +66,12 @@ def get_decision_logs(db: Session = Depends(get_db)) -> list[MLDecisionLog]:
 def get_snapshot() -> dict:
     s = get_settings()
     engine = get_engine()
-    paper = PaperBroker()
+    live = UpbitLiveBroker()
     return {
         "tracked_markets": get_active_markets(),
         "strategy_mode": s.strategy_mode,
-        "live_trading_enabled": s.live_trading_enabled,
-        "paper_equity": paper.get_equity(),
+        "live_trading_enabled": True,
+        "live_equity": live.get_equity(),
         "daily_pnl_krw": engine.state.daily_realized_pnl_krw,
         "daily_trade_count": engine.state.daily_trade_count,
         "max_daily_trades": s.max_daily_trades,
@@ -91,24 +88,21 @@ async def websocket_dashboard(websocket: WebSocket):
                 with SessionLocal() as db_session:
                     # Metrics & Snapshot
                     s = get_settings()
-                    paper = PaperBroker()
                     live = UpbitLiveBroker()
                     engine = get_engine()
                     trade_count = db_session.query(TradeLog).count()
-                    paper_open = db_session.query(PaperPosition).filter(PaperPosition.status == "OPEN").count()
                     live_open = db_session.query(TradePosition).filter(TradePosition.status == "OPEN").count()
                     latest_signal = db_session.query(StrategySignal).order_by(StrategySignal.created_at.desc()).first()
+                    live_equity = live.get_equity()
                     
                     metrics_data = {
                         "trade_count": trade_count,
-                        "paper_equity": paper.get_equity(),
-                        "live_equity": live.get_equity() if s.live_trading_enabled else 0.0,
-                        "paper_open_positions": paper_open,
+                        "live_equity": live_equity,
                         "live_open_positions": live_open,
                         "daily_realized_pnl_krw": engine.state.daily_realized_pnl_krw,
                         "daily_start_equity": engine.state.daily_start_equity,
                         "daily_trade_count": engine.state.daily_trade_count,
-                        "live_trading_enabled": s.live_trading_enabled,
+                        "live_trading_enabled": True,
                         "strategy_mode": s.strategy_mode,
                         "last_signal": {
                             "market": latest_signal.market,
@@ -123,8 +117,8 @@ async def websocket_dashboard(websocket: WebSocket):
                     snapshot_data = {
                         "tracked_markets": get_active_markets(),
                         "strategy_mode": s.strategy_mode,
-                        "live_trading_enabled": s.live_trading_enabled,
-                        "paper_equity": paper.get_equity(),
+                        "live_trading_enabled": True,
+                        "live_equity": live_equity,
                         "daily_pnl_krw": engine.state.daily_realized_pnl_krw,
                         "daily_trade_count": engine.state.daily_trade_count,
                         "max_daily_trades": s.max_daily_trades,
@@ -135,8 +129,8 @@ async def websocket_dashboard(websocket: WebSocket):
                     logs_raw = db_session.query(TradeLog).order_by(TradeLog.created_at.desc()).limit(100).all()
                     trades_data = [TradeLogSchema.model_validate(log).model_dump(mode="json") for log in logs_raw]
 
-                    # Decisions List
-                    decisions_raw = db_session.query(MLDecisionLog).order_by(MLDecisionLog.created_at.desc()).limit(50).all()
+                    # Decisions List (limit reduced for performance)
+                    decisions_raw = db_session.query(MLDecisionLog).order_by(MLDecisionLog.created_at.desc()).limit(20).all()
                     decisions_data = [MLDecisionLogSchema.model_validate(dec).model_dump(mode="json") for dec in decisions_raw]
 
                     # Config
@@ -153,7 +147,7 @@ async def websocket_dashboard(websocket: WebSocket):
                     ks = get_kill_switch()
                     risk_state_data = {
                         "kill_switch": ks.is_enabled(),
-                        "live_trading_enabled": s.live_trading_enabled,
+                        "live_trading_enabled": True,
                         "daily_loss_limit": s.daily_loss_limit,
                         "daily_realized_pnl_krw": engine.state.daily_realized_pnl_krw,
                         "daily_start_equity": engine.state.daily_start_equity,
@@ -164,13 +158,13 @@ async def websocket_dashboard(websocket: WebSocket):
                         "risk_per_trade": s.risk_per_trade,
                         "cooldown_after_loss_minutes": s.cooldown_after_loss_minutes,
                         "last_loss_unix": engine.state.last_loss_unix,
-                        "current_equity_paper": paper.get_equity(),
+                        "current_equity": live_equity,
                         "fee_rate": s.fee_rate,
                         "slippage_est": s.slippage_est,
                     }
 
-                    # Risk Events
-                    events_raw = db_session.query(RiskEvent).order_by(RiskEvent.created_at.desc()).limit(20).all()
+                    # Risk Events (limit reduced for performance)
+                    events_raw = db_session.query(RiskEvent).order_by(RiskEvent.created_at.desc()).limit(10).all()
                     risk_events_data = [
                         {
                             "id": r.id,
@@ -182,30 +176,6 @@ async def websocket_dashboard(websocket: WebSocket):
                         }
                         for r in events_raw
                     ]
-
-                    # Shadow Compare
-                    cutoff = dt.datetime.utcnow() - dt.timedelta(days=7)
-                    shadow_raw = (
-                        db_session.query(ShadowCompare)
-                        .filter(ShadowCompare.created_at >= cutoff)
-                        .order_by(ShadowCompare.created_at.asc())
-                        .limit(500)
-                        .all()
-                    )
-                    shadow_compare_data = {
-                        "count": len(shadow_raw),
-                        "series": [
-                            {
-                                "ts": r.created_at.isoformat() if r.created_at else None,
-                                "paper_equity": r.paper_equity,
-                                "live_equity": r.live_equity,
-                                "paper_open": r.paper_open_positions,
-                                "live_open": r.live_open_positions,
-                                "daily_pnl_pct": r.daily_pnl_pct,
-                            }
-                            for r in shadow_raw
-                        ],
-                    }
 
                 # Executed outside session and handles connection errors
                 account_data = await run_in_threadpool(get_account_balance)
@@ -222,13 +192,12 @@ async def websocket_dashboard(websocket: WebSocket):
                     "risk-events": risk_events_data,
                     "account": account_data,
                     "strategy-status": strategy_status_data,
-                    "shadow-compare": shadow_compare_data,
                 }
                 await websocket.send_json(payload)
             except Exception as inner_e:
                 # Log interior exceptions and retry
                 pass
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(3.0)  # Increased from 2.0 to reduce server load
     except WebSocketDisconnect:
         pass
     except Exception:

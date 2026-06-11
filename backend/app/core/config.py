@@ -10,9 +10,9 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=Path(__file__).resolve().parents[2] / ".env", env_file_encoding="utf-8", extra="allow")
 
-    environment: str = "development"
-    debug: bool = True
-    log_level: str = "INFO"
+    environment: str = "production"
+    debug: bool = False
+    log_level: str = "WARNING"
 
     backend_port: int = 8000
     frontend_port: int = 4173
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     max_position_hold_minutes: int = 60  # v6.0: 충분한 시간 부여 (30분→60분)
     
     # 매매 주기 설정 (초단위) 
-    trading_cycle_seconds: int = 180  # v6.0: 3분 주기 (1분→3분, 과매매 방지)
+    trading_cycle_seconds: int = 300  # v8.0: 5분 주기 (3분→5분, 성능 최적화)
     
     # Legacy momentum/reversal/pump settings removed.
     
@@ -96,8 +96,8 @@ class Settings(BaseSettings):
     # v7.0 Dynamic Portfolio — 유망 코인 자동 선별 (Cross-sectional momentum)
     # =========================================================================
     dynamic_universe_enabled: bool = True      # 동적 유니버스 on/off
-    universe_size: int = 6                     # 동시에 추적/매매할 유망 코인 수
-    universe_refresh_sec: int = 900            # 유니버스 재선정 주기 (15분)
+    universe_size: int = 4                     # 동시에 추적/매매할 유망 코인 수 (6→4 경량화)
+    universe_refresh_sec: int = 1800           # 유니버스 재선정 주기 (15분→30분, 성능 최적화)
     universe_min_value_24h: float = 30_000_000_000  # 최소 24h 거래대금 (유동성 필터)
     universe_max_spread_pct: float = 0.005     # 진입 허용 최대 스프레드 (0.5%)
     universe_momentum_window: int = 24         # 모멘텀 평가 캔들 수 (15m * 24 = 6h)
