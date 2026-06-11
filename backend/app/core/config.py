@@ -63,10 +63,8 @@ class Settings(BaseSettings):
     kakao_client_id: str = ""
     kakao_redirect_uri: str = "http://localhost:4173/auth/kakao/callback"
 
-    default_trade_amount: float = 10_000  # v6.0: 잔고 보호 (40K 기준)
-    max_open_positions: int = 4  # v7.0: 동적 포트폴리오 (유망 코인 분산)
-    stop_loss_percent: float = 1.5  # v6.0: -1.5% 손절 (타이트)
-    take_profit_percent: float = 3.0  # v6.0: +3% 익절 (손익비 1:2)
+    default_trade_amount: float = 6_000  # v8.1: 최소 주문 금액 기준으로 변경
+    max_open_positions: int = 2  # v8.1: 소액 계좌용 (4→2)\n    stop_loss_percent: float = 2.0  # v8.1: 약간 완화 (1.5%→2%)\n    take_profit_percent: float = 4.0  # v8.1: 약간 완화 (3%→4%)
     max_position_hold_minutes: int = 60  # v6.0: 충분한 시간 부여 (30분→60분)
     
     # 매매 주기 설정 (초단위) 
@@ -112,9 +110,9 @@ class Settings(BaseSettings):
     live_trading_enabled: bool = True
 
     # 2) 리스크 관리
-    risk_per_trade: float = 0.01          # 자본의 1%
-    max_position_ratio: float = 0.25      # 단일 포지션 자본 비중 상한
-    daily_loss_limit: float = 0.03        # 일일 -3% 도달 시 자동 정지
+    risk_per_trade: float = 0.02          # v8.1: 2%로 상향 (소액 계좌 대응)
+    max_position_ratio: float = 0.35      # v8.1: 35%로 상향 (소액 계좌 대응)
+    daily_loss_limit: float = 0.05        # v8.1: 5%로 완화 (소액 계좌)
     fee_rate: float = 0.0005              # 업비트 수수료 (편도)
     slippage_est: float = 0.0005          # 슬리피지 추정
 

@@ -57,16 +57,16 @@ class HybridStrategy:
         ema_mid: int = 21,
         ema_slow: int = 55,
         # Momentum parameters  
-        rsi_oversold: float = 35.0,  # Relaxed from 30
-        rsi_overbought: float = 65.0,  # Relaxed from 70
+        rsi_oversold: float = 40.0,  # More relaxed for small accounts
+        rsi_overbought: float = 60.0,  # More relaxed 
         # Volume parameters
-        volume_mult: float = 1.2,  # Relaxed from 1.3
+        volume_mult: float = 1.1,  # More relaxed from 1.2
         # Risk parameters
-        stop_atr_mult: float = 1.8,
-        target_atr_mult: float = 3.6,
+        stop_atr_mult: float = 1.5,  # Tighter stop for small accounts
+        target_atr_mult: float = 3.0,  # Adjusted target
         # Entry conditions
-        min_confluence_score: float = 0.6,  # Minimum score to enter
-        llm_weight: float = 0.3,  # LLM contribution to final score
+        min_confluence_score: float = 0.45,  # Lowered from 0.6 for more signals
+        llm_weight: float = 0.25,  # Slightly less LLM weight
     ):
         self.s = get_settings()
         self.ema_fast = ema_fast
@@ -241,12 +241,12 @@ class HybridStrategy:
         else:
             trend_points -= 0.2
             
-        # ADX trend strength
-        if adx > 25:
+        # ADX trend strength (relaxed for small accounts)
+        if adx > 20:  # Lowered from 25
             trend_points += 0.2 if trend_points > 0 else -0.2
             factors["strong_trend"] = True
-        elif adx < 20:
-            trend_points *= 0.5  # Reduce trend weight in ranging market
+        elif adx < 15:  # Lowered from 20
+            trend_points *= 0.7  # Less penalty in ranging market (was 0.5)
             factors["weak_trend"] = True
             
         # Donchian breakout
