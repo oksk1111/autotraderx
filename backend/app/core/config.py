@@ -32,13 +32,13 @@ class Settings(BaseSettings):
     upbit_access_key: str = ""
     upbit_secret_key: str = ""
 
-    # AI/LLM 설정 (LLM 중심 자동투자 기본)
-    use_ai_verification: bool = True
-    use_groq: bool = True
+    # AI/LLM 설정 (LLM 무거운 연산 제거, 경량화 및 속도 향상)
+    use_ai_verification: bool = False
+    use_groq: bool = False
     use_ollama: bool = False
     
-    # ML 모델 사용 여부 (LLM 검증 입력용 신호 생성에 사용)
-    use_ml_models: bool = True
+    # ML 모델 사용 여부 (무거운 모델 제거)
+    use_ml_models: bool = False
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
     ollama_base_url: str = "http://host.docker.internal:11434"
@@ -63,22 +63,24 @@ class Settings(BaseSettings):
     kakao_client_id: str = ""
     kakao_redirect_uri: str = "http://localhost:4173/auth/kakao/callback"
 
-    default_trade_amount: float = 6_000  # v8.1: 최소 주문 금액 기준으로 변경
-    max_open_positions: int = 2  # v8.1: 소액 계좌용 (4→2)\n    stop_loss_percent: float = 2.0  # v8.1: 약간 완화 (1.5%→2%)\n    take_profit_percent: float = 4.0  # v8.1: 약간 완화 (3%→4%)
-    max_position_hold_minutes: int = 60  # v6.0: 충분한 시간 부여 (30분→60분)
+    default_trade_amount: float = 10_000
+    max_open_positions: int = 5
+    stop_loss_percent: float = 2.0
+    take_profit_percent: float = 4.0
+    max_position_hold_minutes: int = 30
     
     # 매매 주기 설정 (초단위) 
-    trading_cycle_seconds: int = 300  # v8.0: 5분 주기 (3분→5분, 성능 최적화)
+    trading_cycle_seconds: int = 60
     
     # Legacy momentum/reversal/pump settings removed.
     
     # v6.0 신규: 자본 보존 안전장치 (Capital Preservation)
-    daily_max_loss_percent: float = 3.0   # 일일 최대 손실 3% → 자동 매매 중단
-    min_confidence_for_trade: float = 0.75  # 최소 신뢰도 75% (0.6→0.75)
-    max_investment_ratio: float = 0.25    # 단일 거래 최대 투자비율 25%
-    cooldown_after_loss_minutes: int = 30  # 손절 후 30분 쿨다운
-    max_daily_trades: int = 12            # v7.0: 동적 포트폴리오 (코인 수 증가 반영)
-    llm_autotrading_enabled: bool = True
+    daily_max_loss_percent: float = 5.0
+    min_confidence_for_trade: float = 0.50
+    max_investment_ratio: float = 0.2
+    cooldown_after_loss_minutes: int = 5
+    max_daily_trades: int = 50
+    llm_autotrading_enabled: bool = False
 
     # 급등 스트리밍 알림 (WebSocket, alert-only)
     surge_alert_enabled: bool = True
@@ -94,14 +96,14 @@ class Settings(BaseSettings):
     # v7.0 Dynamic Portfolio — 유망 코인 자동 선별 (Cross-sectional momentum)
     # =========================================================================
     dynamic_universe_enabled: bool = True      # 동적 유니버스 on/off
-    universe_size: int = 4                     # 동시에 추적/매매할 유망 코인 수 (6→4 경량화)
-    universe_refresh_sec: int = 1800           # 유니버스 재선정 주기 (15분→30분, 성능 최적화)
+    universe_size: int = 10
+    universe_refresh_sec: int = 900
     universe_min_value_24h: float = 30_000_000_000  # 최소 24h 거래대금 (유동성 필터)
     universe_max_spread_pct: float = 0.005     # 진입 허용 최대 스프레드 (0.5%)
     universe_momentum_window: int = 24         # 모멘텀 평가 캔들 수 (15m * 24 = 6h)
     universe_always_include: List[str] = ["KRW-BTC", "KRW-ETH"]  # 항상 포함 앵커
     universe_exclude: List[str] = []           # 제외할 마켓 (스테이블코인 등)
-    max_portfolio_exposure: float = 0.90       # 총 포지션 노출 상한 (자본 대비)
+    max_portfolio_exposure: float = 0.95
 
     # =========================================================================
     # v5.0 Capital First Rebuild — 신규 설정
@@ -110,8 +112,8 @@ class Settings(BaseSettings):
     live_trading_enabled: bool = True
 
     # 2) 리스크 관리
-    risk_per_trade: float = 0.02          # v8.1: 2%로 상향 (소액 계좌 대응)
-    max_position_ratio: float = 0.35      # v8.1: 35%로 상향 (소액 계좌 대응)
+    risk_per_trade: float = 0.05
+    max_position_ratio: float = 1.0
     daily_loss_limit: float = 0.05        # v8.1: 5%로 완화 (소액 계좌)
     fee_rate: float = 0.0005              # 업비트 수수료 (편도)
     slippage_est: float = 0.0005          # 슬리피지 추정
@@ -124,7 +126,7 @@ class Settings(BaseSettings):
     # momentum: aggressive momentum strategy
     # dip: buy-the-dip strategy
     # off: no trading
-    strategy_mode: str = "hybrid"           # v8.0: default to hybrid
+    strategy_mode: str = "momentum"
 
     # v8.0 Hybrid Strategy Settings
     hybrid_min_confluence: float = 0.55     # Minimum score for entry (lowered for more trades)

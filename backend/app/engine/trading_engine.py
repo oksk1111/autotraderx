@@ -119,18 +119,17 @@ class TradingEngine:
             chosen = self.hybrid
             # Fallback to regime-based if hybrid not suitable
             if reading.regime == Regime.CHAOS:
-                self._log_signal(market, reading.regime.value, "-", "HOLD",
-                                 price=candles_1m[-1].close if candles_1m else 0.0,
-                                 rationale=f"regime=CHAOS — too volatile, staying out")
+                # Disable excessive DB logging for HOLDs during CHAOS to speed up the loop
                 return None
 
         signal = chosen.evaluate(market, candles_1m, candles_5m, candles_15m)
         signal.regime = reading.regime.value
 
-        # 4) Persist signal row
-        self._log_signal(market, signal.regime, signal.strategy, signal.action,
-                         signal.price, signal.atr, signal.stop_price,
-                         signal.target_price, signal.rationale)
+        # 4) Persist signal row (skip HOLD to reduce DB load and speed up)
+        if signal.action != "HOLD":
+            self._log_signal(market, signal.regime, signal.strategy, signal.action,
+                             signal.price, signal.atr, signal.stop_price,
+                             signal.target_price, signal.rationale)
 
         if signal.action != "BUY":
             return signal
