@@ -10,6 +10,7 @@ from .trading import (
     PaperPosition,
     PaperAccount,
 )
+from .earn import EarnOpportunity, EarnLog, EarnPhaseState
 
 __all__ = [
     "Base",
@@ -22,4 +23,7 @@ __all__ = [
     "ShadowCompare",
     "PaperPosition",
     "PaperAccount",
+    "EarnOpportunity",
+    "EarnLog",
+    "EarnPhaseState",
 ]

@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 
 _ws_task: Optional[asyncio.Task] = None
 _universe_task: Optional[asyncio.Task] = None
+_earn_task: Optional[asyncio.Task] = None
 _universe: Optional[UniverseRunner] = None
 
 
@@ -31,7 +32,7 @@ def register_events(app: FastAPI) -> None:
         s = get_settings()
         seed_markets = list(s.tracked_markets)
 
-        global _ws_task, _universe_task, _universe
+        global _ws_task, _universe_task, _earn_task, _universe
 
         if s.dynamic_universe_enabled:
             registry = get_active_market_registry()
@@ -48,12 +49,25 @@ def register_events(app: FastAPI) -> None:
                 return
             _ws_task = asyncio.create_task(run_upbit_ws_loop(seed_markets), name="upbit-ws")
 
+        # Start Earn system (zero-capital bootstrap)
+        if s.earn_system_enabled:
+            from app.earn import get_earn_manager
+            earn_mgr = get_earn_manager()
+            _earn_task = asyncio.create_task(earn_mgr.run(), name="earn-manager")
+            logger.info("EarnManager task scheduled")
+
     @app.on_event("shutdown")
     async def shutdown_event() -> None:  # pylint: disable=unused-variable
-        global _ws_task, _universe_task, _universe
+        global _ws_task, _universe_task, _earn_task, _universe
+
+        # Stop earn manager
+        if _earn_task is not None:
+            from app.earn import get_earn_manager
+            get_earn_manager().stop()
+
         if _universe is not None:
             _universe.stop()
-        for task in (_universe_task, _ws_task):
+        for task in (_universe_task, _ws_task, _earn_task):
             if task is None:
                 continue
             task.cancel()

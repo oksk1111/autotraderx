@@ -150,6 +150,18 @@ class Settings(BaseSettings):
     # 7) 백테스트
     backtest_data_dir: str = "data/raw"
 
+    # =========================================================================
+    # Earn System — Zero-Capital Bootstrap (에어드롭/이벤트/Faucet)
+    # =========================================================================
+    earn_system_enabled: bool = True
+    earn_upbit_events_enabled: bool = True
+    earn_airdrop_enabled: bool = True
+    earn_faucets_enabled: bool = False       # Low yield, disabled by default
+    earn_scan_interval_sec: int = 600        # 10 minutes
+    earn_auto_claim: bool = False            # Manual approval by default
+    earn_phase2_threshold_krw: float = 6000.0   # Min to start micro-trading
+    earn_phase3_threshold_krw: float = 50000.0  # Normal trading mode
+
     slack_webhook_url: str | None = None
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
